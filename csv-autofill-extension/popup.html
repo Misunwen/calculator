@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV 自動帶入</title>
+    <style>
+        body {
+            width: 360px;
+            font-family: Arial, "Microsoft JhengHei", sans-serif;
+            font-size: 14px;
+            padding: 12px;
+            background: #f7f7f7;
+            color: #222;
+        }
+
+        h1 {
+            font-size: 18px;
+            margin: 0 0 12px 0;
+        }
+
+        .section {
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        .row {
+            margin-bottom: 10px;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 6px 12px;
+            margin-right: 4px;
+        }
+
+        .primary {
+            background: #007bff;
+            border: 1px solid #007bff;
+            color: #fff;
+            font-weight: bold;
+            border-radius: 4px;
+        }
+
+        .status {
+            font-size: 13px;
+            color: #555;
+            white-space: pre-line;
+        }
+
+        select,
+        input[type="file"] {
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+<h1>CSV 自動全部帶入</h1>
+
+<div class="section">
+    <div class="row">
+        <label>
+            CSV 編碼：
+            <select id="encodingSelect">
+                <option value="utf-8">UTF-8</option>
+                <option value="big5">Big5 / ANSI</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="row">
+        <input type="file" id="csvFileInput" accept=".csv,text/csv">
+    </div>
+
+    <div class="row">
+        <button id="loadAndFillBtn" class="primary">載入並全部帶入</button>
+        <button id="checkFieldsBtn">檢查欄位</button>
+    </div>
+
+    <div id="statusText" class="status">請選擇 CSV 檔案</div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

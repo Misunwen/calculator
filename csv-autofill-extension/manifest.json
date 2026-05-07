@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "CSV 自動全部帶入表格",
+  "version": "1.0.0",
+  "description": "載入 CSV 後直接全部帶入測量表格",
+  "permissions": [
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "CSV 自動帶入",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
