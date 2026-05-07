@@ -334,12 +334,12 @@
 <div class="note">
     <strong>計算模式說明：</strong><br>
     1. 角度輸入格式為「度、分、秒」，程式會自動換算成秒數計算。<br>
-    2. 水平讀數正倒鏡差值採用：倒鏡讀數 − 正鏡讀數 − 180°。<br>
-    3. 照準軸誤差 C 以平點與參點之平均半差估算。<br>
-    4. 橫軸誤差 i 以高點相對於平點、參點之垂直角差推算。<br>
-    5. 垂直指標誤差 I 採用：I =（正鏡天頂距 + 倒鏡天頂距 − 360°）/2。<br>
-    6. 一測回水平角精度 H 以各測回角度之標準差估算，門檻值為儀器精度的 2 倍。<br>
-    7. 計算數據格式中，「平均值 +/- 標準差」對應表格範例顯示方式。
+    2. 照準軸誤差 C 採用 3 測回 × 3 點之正倒鏡水平讀數差：H倒 − H正 − 180°，並取平均值與 95% 信賴區間半寬。<br>
+    3. 橫軸誤差 i 使用正鏡與倒鏡之水平角差，配合高點與平點、參點之垂直角差推算。<br>
+    4. 垂直指標誤差 I 採用平點：I =（正鏡天頂距 + 倒鏡天頂距 − 360°）/2。<br>
+    5. 一測回水平角精度 H 使用正鏡水平角，以平點為基準，計算高點角與參點角在三測回中的殘差。<br>
+    6. H 判定門檻值為儀器精度的 2 倍。<br>
+    7. 計算數據格式中，「平均值 +/- 誤差值」對應表格範例顯示方式。
 </div>
 
 <script>
@@ -928,6 +928,230 @@ function stddev(arr) {
 
     return Math.sqrt(sum / (valid.length - 1));
 }
+/* =========================
+   B 版本計算用輔助函式
+========================= */
+function validNumbers(arr) {
+    return arr.filter(v => v !== null && v !== undefined && !isNaN(v) && isFinite(v));
+}
+function confidence95HalfWidth(arr) {
+    /*
+        95% 信賴區間半寬：
+        t × s / sqrt(n)
+        B 表格標題有：
+        判定（95%信賴水準）
+        所以 +/- 建議用這個。
+    */
+    const valid = validNumbers(arr);
+    const n = valid.length;
+    if (n < 2) {
+        return 0;
+    }
+    const s = stddev(valid);
+    const df = n - 1;
+    const tTable95 = {
+        1: 12.706,
+        2: 4.303,
+        3: 3.182,
+        4: 2.776,
+        5: 2.571,
+        6: 2.447,
+        7: 2.365,
+        8: 2.306,
+        9: 2.262,
+        10: 2.228,
+        11: 2.201,
+        12: 2.179,
+        13: 2.160,
+        14: 2.145,
+        15: 2.131
+    };
+    const t = tTable95[df] || 1.96;
+    return t * s / Math.sqrt(n);
+}
+function standardErrorPopulation(arr) {
+    /*
+        母體標準差 / sqrt(n)
+        B 表格的垂直指標誤差 I：
+        比較接近用平點 I 的平均值，
+        +/- 則接近標準誤。
+    */
+    const valid = validNumbers(arr);
+    const n = valid.length;
+    if (n < 2) {
+        return 0;
+    }
+    const psd = populationStddev(valid);
+    if (psd === null || isNaN(psd)) {
+        return 0;
+    }
+    return psd / Math.sqrt(n);
+}
+function getFaceAngle(group, r, fromKey, toKey) {
+    /*
+        取得單一鏡位的水平角：
+        angle = to - from
+        例如：
+        from = 平點
+        to   = 高點
+        angle = 高點讀數 - 平點讀數
+    */
+    const from = getAngleSeconds(group, r, fromKey);
+    const to = getAngleSeconds(group, r, toKey);
+    if (from === null || to === null) {
+        return null;
+    }
+    return normalize180(to - from);
+}
+function getCollimationValueForB(r, pKey) {
+    /*
+        接近 B 表格的照準軸誤差 C 計算方式。
+        使用每一點正倒鏡水平讀數差：
+            q = H倒 - H正 - 180°
+        單位：秒。
+        注意：
+        你前面圖片寫的是：
+            C = [H正 - (H倒 ± 180°)] / 4
+        但依你給的 B 表格數值反推，
+        B 結果比較接近直接使用：
+            H倒 - H正 - 180°
+        如果之後你要完全依圖片公式，
+        可把最後一行：
+            return q;
+        改成：
+            return -q / 4;
+    */
+    const h1 = getAngleSeconds("hFace1", r, pKey);
+    const h2 = getAngleSeconds("hFace2", r, pKey);
+    if (h1 === null || h2 === null) {
+        return null;
+    }
+    const q = normalize180(h2 - h1 - 180 * 3600);
+    return -q / 4;
+}
+function getAllCollimationValuesForB() {
+    /*
+        3 測回 × 3 點，共最多 9 筆。
+    */
+    const values = [];
+    for (let r = 1; r <= 3; r++) {
+        points.forEach(p => {
+            const c = getCollimationValueForB(r, p.key);
+            if (c !== null && !isNaN(c)) {
+                values.push(c);
+            }
+        });
+    }
+    return values;
+}
+function getHorizontalPrecisionHForB() {
+    /*
+        接近 B 表格的一測回水平角精度 H。
+        B 表格的 H = 0.9 很像是：
+        1. 只使用正鏡水平讀數。
+        2. 每測回以平點為基準。
+        3. 分別計算：
+           高點角 = 高點正鏡 - 平點正鏡
+           參點角 = 參點正鏡 - 平點正鏡
+        4. 三測回各自形成兩組方向角。
+        5. 對每一組角度求平均與殘差。
+        6. H = sqrt( Σv² / [k × n × (n - 1)] )
+        其中：
+        k = 角度組數，這裡為 2，高點與參點
+        n = 測回數，完整資料為 3
+    */
+    const angleGroups = [
+        [], // 平點 -> 高點
+        []  // 平點 -> 參點
+    ];
+    for (let r = 1; r <= 3; r++) {
+        const angleHigh = getFaceAngle("hFace1", r, "level", "high");
+        const angleRef = getFaceAngle("hFace1", r, "level", "ref");
+        if (angleHigh !== null) {
+            angleGroups[0].push(angleHigh);
+        }
+        if (angleRef !== null) {
+            angleGroups[1].push(angleRef);
+        }
+    }
+    let sumResidualSquare = 0;
+    let groupCount = 0;
+    let n = null;
+    angleGroups.forEach(group => {
+        const valid = validNumbers(group);
+        if (valid.length >= 2) {
+            const mean = average(valid);
+            valid.forEach(v => {
+                const residual = normalize180(v - mean);
+                sumResidualSquare += residual * residual;
+            });
+            groupCount++;
+            if (n === null) {
+                n = valid.length;
+            } else {
+                n = Math.min(n, valid.length);
+            }
+        }
+    });
+    if (groupCount === 0 || n === null || n < 2) {
+        return null;
+    }
+    return Math.sqrt(sumResidualSquare / (groupCount * n * (n - 1)));
+}
+function getIaxisCandidatesForB() {
+    /*
+        接近 B 表格的橫軸誤差 i。
+        使用正鏡與倒鏡的「水平角差」推算，而不是直接用單點半差。
+        對每測回計算兩組：
+        1. 平點 -> 高點
+        2. 參點 -> 高點
+        每組：
+            angleP = 正鏡水平角
+            angleR = 倒鏡水平角
+            delta = angleR - angleP
+            i = | delta | / [ 2 × |tan(V高) - tan(V基準)| ]
+        單位：秒。
+    */
+    const candidates = [];
+    for (let r = 1; r <= 3; r++) {
+        const vHigh = getVerticalAngle(r, "high");
+        const vLevel = getVerticalAngle(r, "level");
+        const vRef = getVerticalAngle(r, "ref");
+        if (vHigh === null) {
+            continue;
+        }
+        const tanHigh = Math.tan(radFromSec(vHigh));
+        /*
+            1. 平點 -> 高點
+        */
+        if (vLevel !== null) {
+            const angleP = getFaceAngle("hFace1", r, "level", "high");
+            const angleR = getFaceAngle("hFace2", r, "level", "high");
+            if (angleP !== null && angleR !== null) {
+                const delta = normalize180(angleR - angleP);
+                const denominator = 2 * Math.abs(tanHigh - Math.tan(radFromSec(vLevel)));
+                if (denominator > 0.000001) {
+                    candidates.push(Math.abs(delta) / denominator);
+                }
+            }
+        }
+        /*
+            2. 參點 -> 高點
+        */
+        if (vRef !== null) {
+            const angleP = getFaceAngle("hFace1", r, "ref", "high");
+            const angleR = getFaceAngle("hFace2", r, "ref", "high");
+            if (angleP !== null && angleR !== null) {
+                const delta = normalize180(angleR - angleP);
+                const denominator = 2 * Math.abs(tanHigh - Math.tan(radFromSec(vRef)));
+                if (denominator > 0.000001) {
+                    candidates.push(Math.abs(delta) / denominator);
+                }
+            }
+        }
+    }
+    return candidates;
+}
 function populationStddev(arr) {
     const valid = arr.filter(v => v !== null && !isNaN(v));
 
@@ -1066,138 +1290,44 @@ function calculate() {
     const warnings = [];
 
     /*
-        計算模式：
+        =========================
+        B 版本計算方向
+        =========================
 
         1. 照準軸誤差 C：
-           每一點：2C = R - (L + 180°)
-           每測回：Ci = (C高 + C平 + C參) / 3
-           三測回：C = (C1 + C2 + C3) / 3
+           使用 3 測回 × 3 點的正倒鏡水平讀數差：
 
-        2. H 使用全部 9 筆水平半差殘差推算。
+               C觀測值 = H倒 - H正 - 180°
 
-        3. I 只使用平點、參點，不使用高點。
+           最後取 9 筆平均值。
+           +/- 使用 95% 信賴區間半寬。
 
-        4. i 使用每測回高點相對於平點、參點平均值推算。
+        2. 橫軸誤差 i：
+           使用正鏡與倒鏡的水平角差，
+           配合高點與平點、參點的垂直角差推算。
+
+        3. 垂直指標誤差 I：
+           只使用平點：
+
+               I = (Z正 + Z倒 - 360°) / 2
+
+        4. 一測回水平角精度 H：
+           使用正鏡水平讀數，
+           以平點為基準，
+           計算高點角、參點角在三測回中的殘差。
     */
 
-    const horizontalHalfErrors = [];   // 全部 9 筆水平半差，用於 H
-    const cRoundMeans = [];            // 照準軸誤差 C1、C2、C3
-
-    const iCandidates = [];            // 每測回橫軸誤差
-    const vIndexCandidates = [];       // 平點、參點的垂直指標誤差
-    const vIndexRoundMeans = [];       // 每測回平點、參點 I 平均，用於 +/- 顯示
+    /*
+        =========================
+        備註條件檢查
+        =========================
+    */
 
     for (let r = 1; r <= 3; r++) {
-        /*
-            getHorizontalFaceDifference() 內部已經是：
-
-            diff = R - L - 180°
-
-            所以：
-
-            C點 = diff / 2
-        */
-        const diffHigh = getHorizontalFaceDifference(r, "high");
-        const diffLevel = getHorizontalFaceDifference(r, "level");
-        const diffRef = getHorizontalFaceDifference(r, "ref");
-
-        const halfHigh = diffHigh === null ? null : diffHigh / 2;
-        const halfLevel = diffLevel === null ? null : diffLevel / 2;
-        const halfRef = diffRef === null ? null : diffRef / 2;
-
-        /*
-            H：高點、平點、參點全部納入。
-            這裡保留 9 筆水平半差，用於後面 H 的殘差計算。
-        */
-        if (halfHigh !== null) horizontalHalfErrors.push(halfHigh);
-        if (halfLevel !== null) horizontalHalfErrors.push(halfLevel);
-        if (halfRef !== null) horizontalHalfErrors.push(halfRef);
-
-        /*
-            =========================
-            照準軸誤差 C，依指定公式
-            =========================
-
-            Step 1：每一點
-
-                2C = R - (L + 180°)
-
-                C點 = [R - (L + 180°)] / 2
-
-            對應程式：
-
-                halfHigh  = C高
-                halfLevel = C平
-                halfRef   = C參
-
-            Step 2：每測回
-
-                Ci = (C高 + C平 + C參) / 3
-
-            注意：
-            這裡要求高點、平點、參點三筆都要有資料，
-            才計算該測回的 Ci。
-        */
-        if (
-            halfHigh !== null && !isNaN(halfHigh) &&
-            halfLevel !== null && !isNaN(halfLevel) &&
-            halfRef !== null && !isNaN(halfRef)
-        ) {
-            const cRoundMean = (halfHigh + halfLevel + halfRef) / 3;
-            cRoundMeans.push(cRoundMean);
-        }
-
-        /*
-            垂直指標誤差 I：
-            依圖片結果，只使用平點、參點，不使用高點。
-        */
-        const vIndexLevel = getVerticalIndexError(r, "level");
-        const vIndexRef = getVerticalIndexError(r, "ref");
-
-        if (vIndexLevel !== null) vIndexCandidates.push(vIndexLevel);
-        if (vIndexRef !== null) vIndexCandidates.push(vIndexRef);
-
-        const roundVIndexMean = average([vIndexLevel, vIndexRef]);
-
-        if (roundVIndexMean !== null) {
-            vIndexRoundMeans.push(roundVIndexMean);
-        }
-
-        /*
-            橫軸誤差 i：
-            使用高點水平半差與平點、參點平均水平半差之差，
-            再除以 tan 垂直角差。
-        */
         const vHigh = getVerticalAngle(r, "high");
         const vLevel = getVerticalAngle(r, "level");
         const vRef = getVerticalAngle(r, "ref");
 
-        const baseHalf = average([halfLevel, halfRef]);
-
-        if (
-            halfHigh !== null &&
-            baseHalf !== null &&
-            vHigh !== null &&
-            vLevel !== null &&
-            vRef !== null
-        ) {
-            const tanHigh = Math.tan(radFromSec(vHigh));
-            const tanLevel = Math.tan(radFromSec(vLevel));
-            const tanRef = Math.tan(radFromSec(vRef));
-
-            const tanBase = average([tanLevel, tanRef]);
-            const denominator = tanHigh - tanBase;
-
-            if (Math.abs(denominator) > 0.000001) {
-                // 注意負號：為了符合圖片表格的 i 正負號定義
-                const iValue = -1 * (halfHigh - baseHalf) / denominator;
-                iCandidates.push(iValue);
-            }
-        }
-
-        /*
-            備註條件檢查
-        */
         if (vLevel !== null && Math.abs(vLevel) > 3 * 3600) {
             warnings.push(`第 ${r} 測回：平點垂直角超過 ±3°。`);
         }
@@ -1213,98 +1343,83 @@ function calculate() {
 
     /*
         =========================
-        照準軸誤差 C
+        1. 照準軸誤差 C
+        =========================
+    */
+
+    const cValues = getAllCollimationValuesForB();
+
+    const C = average(cValues);
+    const Csd = cValues.length >= 2 ? confidence95HalfWidth(cValues) : null;
+
+    /*
+        =========================
+        2. 橫軸誤差 i
+        =========================
+    */
+
+    const iCandidates = getIaxisCandidatesForB();
+
+    const Iaxis = average(iCandidates);
+
+    /*
+        B 表格的 i +/- 比較接近 2 倍樣本標準差。
+    */
+    let IaxisSd = null;
+
+    if (iCandidates.length >= 2) {
+        const s = stddev(iCandidates);
+        IaxisSd = s === null ? null : 2 * s;
+    }
+
+    /*
+        =========================
+        3. 垂直指標誤差 I
         =========================
 
-        Step 3：三測回平均
-
-            C = (C1 + C2 + C3) / 3
-
-        cRoundMeans 內容為：
-
-            [
-                第 1 測回 C1,
-                第 2 測回 C2,
-                第 3 測回 C3
-            ]
+        只使用平點。
     */
-    const C = average(cRoundMeans);
 
-    /*
-        H 用平均值：
-        H 仍然使用全部 9 筆水平半差平均值來算殘差。
-        這樣不會讓 H 被 C 的顯示公式影響。
-    */
-    const C_forH = average(horizontalHalfErrors);
+    const vIndexCandidates = [];
 
-    /*
-        H：依圖片表格推估公式
+    for (let r = 1; r <= 3; r++) {
+        const vIndexLevel = getVerticalIndexError(r, "level");
 
-            H = 2 × sqrt(Σ(e - C_forH)^2 / (n - 2))
-
-        e = 每一筆水平半差
-        n = 水平半差筆數，完整時為 9
-    */
-    let H = null;
-
-    if (C_forH !== null && horizontalHalfErrors.length > 2) {
-        const sumResidualSquare = horizontalHalfErrors.reduce((sum, value) => {
-            return sum + Math.pow(value - C_forH, 2);
-        }, 0);
-
-        H = 2 * Math.sqrt(sumResidualSquare / (horizontalHalfErrors.length - 2));
+        if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
+            vIndexCandidates.push(vIndexLevel);
+        }
     }
 
-    /*
-        C 的 +/-：
-        目前保留你原本符合圖片表格的做法：
-
-            Csd = H / sqrt(3)
-
-        如果你之後想完全用 C1、C2、C3 的標準差，
-        可以改成：
-
-            const Csd = stddevForDisplay(cRoundMeans);
-    */
-    const Csd = H === null ? null : H / Math.sqrt(3);
-
-    /*
-        i：
-        平均值使用每測回推算值。
-        +/- 依圖片表格結果，採用 H × 2 後取整數。
-    */
-    const Iaxis = average(iCandidates);
-    const IaxisSd = H === null ? null : Math.round(H * 2);
-
-    /*
-        I：
-        平均值只使用平點、參點。
-    */
     const Vindex = average(vIndexCandidates);
+    const VindexSd = vIndexCandidates.length >= 2
+        ? standardErrorPopulation(vIndexCandidates)
+        : null;
 
     /*
-        I 的 +/-：
-        使用每測回「平點、參點 I 平均值」的母體標準差，
-        並保留原本修正係數 0.97。
+        =========================
+        4. 一測回水平角精度 H
+        =========================
     */
-    let VindexSd = null;
 
-    if (vIndexRoundMeans.length >= 2) {
-        VindexSd = populationStddev(vIndexRoundMeans) * 0.97;
-    }
+    const H = getHorizontalPrecisionHForB();
 
     /*
+        =========================
         顯示結果
+        =========================
     */
+
     document.getElementById("resultC").textContent = meanPlusMinusText(C, Csd);
     document.getElementById("resultIaxis").textContent = meanPlusMinusText(Iaxis, IaxisSd);
     document.getElementById("resultVindex").textContent = meanPlusMinusText(Vindex, VindexSd);
     document.getElementById("resultH").textContent = valueText(H);
 
     /*
-        儀器精度門檻：
-        H 門檻值 = 儀器精度 × 2
+        =========================
+        儀器精度門檻
+        =========================
     */
+
     const instrumentAccuracy = Number(document.getElementById("instrumentAccuracy").value);
     const hLimit = instrumentAccuracy * 2;
 
@@ -1312,8 +1427,11 @@ function calculate() {
     document.getElementById("instrumentLimitText").textContent = hLimit;
 
     /*
+        =========================
         判定
+        =========================
     */
+
     judgeAbs("judgeC", C, Number(document.getElementById("limitC").value));
     judgeAbs("judgeIaxis", Iaxis, Number(document.getElementById("limitIaxis").value));
     judgeAbs("judgeVindex", Vindex, Number(document.getElementById("limitVindex").value));
@@ -1322,6 +1440,7 @@ function calculate() {
 
     showWarnings(warnings);
 }
+
 /* =========================
    依第 1 測回生成第 2、3 測回
 ========================= */
