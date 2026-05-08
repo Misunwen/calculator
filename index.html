@@ -1121,12 +1121,12 @@ function getIaxisCandidatesForB() {
     /*
         橫軸誤差 i，標準答案校正版。
 
-        使用每一測回的「平點 -> 高點」水平角差。
+        只使用每一測回的「平點 -> 高點」水平角差。
 
-        對每測回：
+        每測回：
 
-            angleP = 正鏡的平點 -> 高點水平角
-            angleR = 倒鏡的平點 -> 高點水平角
+            angleP = 正鏡的 平點 -> 高點 水平角
+            angleR = 倒鏡的 平點 -> 高點 水平角
 
             delta = angleP - angleR
 
@@ -1135,10 +1135,10 @@ function getIaxisCandidatesForB() {
             i = delta / [ 2 × (tan(V高) - tan(V平)) ]
 
         注意：
-        1. 保留正負號，不取 Math.abs。
-        2. 只使用「平點 -> 高點」。
-        3. 不使用「參點 -> 高點」。
-        4. 單位：秒。
+        1. 保留正負號，不使用 Math.abs()
+        2. 只用「平點 -> 高點」
+        3. 不再使用「參點 -> 高點」
+        4. 單位：秒
     */
 
     const candidates = [];
@@ -1174,6 +1174,7 @@ function getIaxisCandidatesForB() {
 
     return candidates;
 }
+
 
 function populationStddev(arr) {
     const valid = arr.filter(v => v !== null && !isNaN(v));
@@ -1375,26 +1376,15 @@ function calculate() {
     //console.log("C values =", cValues);
     //console.log("C mean =", C);
     //console.log("C +/- =", Csd);
-    /*
-        =========================
-        2. 橫軸誤差 i
-        =========================
-    */
-
-    const iCandidates = getIaxisCandidatesForB();
-
-    const Iaxis = average(iCandidates);
-
-    /*
-        B 表格的 i +/- 比較接近 2 倍樣本標準差。
-    */
-    let IaxisSd = null;
-
-    if (iCandidates.length >= 2) {
-        const s = stddev(iCandidates);
-        IaxisSd = s === null ? null : 2 * s;
-    }
-
+/* =========================
+   2. 橫軸誤差 i
+========================= */
+const iCandidates = getIaxisCandidatesForB();
+const Iaxis = average(iCandidates);
+const IaxisSd = standardError(iCandidates);
+console.log("iCandidates =", iCandidates);
+console.log("Iaxis =", Iaxis);
+console.log("IaxisSd =", IaxisSd);
 /*
     =========================
     3. 垂直指標誤差 I
