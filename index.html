@@ -928,6 +928,22 @@ function stddev(arr) {
 
     return Math.sqrt(sum / (valid.length - 1));
 }
+function standardError(arr) {
+    const valid = arr.filter(v => v !== null && !isNaN(v));
+
+    if (valid.length < 2) {
+        return null;
+    }
+
+    const sd = stddev(valid);
+
+    if (sd === null || isNaN(sd)) {
+        return null;
+    }
+
+    return sd / Math.sqrt(valid.length);
+}
+
 /* =========================
    B 版本計算用輔助函式
 ========================= */
@@ -1372,28 +1388,48 @@ function calculate() {
         IaxisSd = s === null ? null : 2 * s;
     }
 
-    /*
-        =========================
-        3. 垂直指標誤差 I
-        =========================
+/*
+    =========================
+    3. 垂直指標誤差 I
+    =========================
 
-        只使用平點。
-    */
+    B 網頁算法：
 
-    const vIndexCandidates = [];
+    使用平點、參點，不使用高點。
 
-    for (let r = 1; r <= 3; r++) {
-        const vIndexLevel = getVerticalIndexError(r, "level");
+    每筆：
+        I = (Z正 + Z倒 - 360°) / 2
 
-        if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
-            vIndexCandidates.push(vIndexLevel);
-        }
+    共 6 筆：
+        第 1 測回平點、參點
+        第 2 測回平點、參點
+        第 3 測回平點、參點
+
+    平均值：
+        6 筆 I 平均
+
+    +/-：
+        樣本標準差 / sqrt(6)
+*/
+
+const vIndexCandidates = [];
+
+for (let r = 1; r <= 3; r++) {
+    const vIndexLevel = getVerticalIndexError(r, "level");
+    const vIndexRef = getVerticalIndexError(r, "ref");
+
+    if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
+        vIndexCandidates.push(vIndexLevel);
     }
 
-    const Vindex = average(vIndexCandidates);
-    const VindexSd = vIndexCandidates.length >= 2
-        ? standardErrorPopulation(vIndexCandidates)
-        : null;
+    if (vIndexRef !== null && !isNaN(vIndexRef)) {
+        vIndexCandidates.push(vIndexRef);
+    }
+}
+
+const Vindex = average(vIndexCandidates);
+const VindexSd = standardError(vIndexCandidates);
+
 
     /*
         =========================
