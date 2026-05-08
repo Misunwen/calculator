@@ -334,15 +334,25 @@
 <div class="note">
     <strong>計算模式說明：</strong><br>
     1. 角度輸入格式為「度、分、秒」，程式會自動換算成秒數計算。<br>
-    2. 照準軸誤差 C 採用 3 測回 × 3 點之正倒鏡水平讀數差：H倒 − H正 − 180°，並取平均值與 95% 信賴區間半寬。<br>
+    2. 照準軸誤差 C 目前採用平點之 3 測回正倒鏡水平讀數差：q = H倒 − H正 − 180°，C = −q / 2，並取平均值與標準誤。<br>
     3. 橫軸誤差 i 使用正鏡與倒鏡之水平角差，配合高點與平點、參點之垂直角差推算。<br>
     4. 垂直指標誤差 I 採用平點：I =（正鏡天頂距 + 倒鏡天頂距 − 360°）/2。<br>
-    5. 一測回水平角精度 H 使用正鏡水平角，以平點為基準，計算高點角與參點角在三測回中的殘差。<br>
+    5. 一測回水平角精度 H 使用正倒鏡平均後之水平方向，以平點為基準，計算高點角與參點角在三測回中的殘差。<br>
     6. H 判定門檻值為儀器精度的 2 倍。<br>
     7. 計算數據格式中，「平均值 +/- 誤差值」對應表格範例顯示方式。
 </div>
 
 <script>
+/* =========================
+   0. 全域設定
+========================= */
+const DEBUG_MODE = false;
+
+const SEC_PER_MINUTE = 60;
+const SEC_PER_DEGREE = 3600;
+const SEC_PER_CIRCLE = 360 * SEC_PER_DEGREE;
+const SEC_180 = 180 * SEC_PER_DEGREE;
+const SEC_90 = 90 * SEC_PER_DEGREE;
 /* =========================
    建立輸入表格
 ========================= */
@@ -444,16 +454,27 @@ function parseCSVText(csvText) {
     /*
         CSV 匯入規則：
 
-        1. 不再強制 9 列。
-        2. 不再強制每列 12 個數值。
-        3. 給幾列，就依序匯入幾列。
-        4. 每列給幾欄，就依序匯入幾欄。
-        5. 最多匯入 9 列。
-        6. 每列最多匯入 12 欄。
-        7. 空欄位不覆蓋原本資料。
+        支援兩種格式：
+
+        格式 A：純 12 欄
+            H_P_degree,H_P_minute,H_P_second,
+            H_R_degree,H_R_minute,H_R_second,
+            Z_P_degree,Z_P_minute,Z_P_second,
+            Z_R_degree,Z_R_minute,Z_R_second
+
+        格式 B：匯出版 14 欄
+            回數,照準點,
+            H_P_degree,H_P_minute,H_P_second,
+            H_R_degree,H_R_minute,H_R_second,
+            Z_P_degree,Z_P_minute,Z_P_second,
+            Z_R_degree,Z_R_minute,Z_R_second
+
+        若偵測到第 1 列是表頭，會自動略過。
+        每列最多匯入 12 個觀測數值。
+        最多匯入 9 列。
+        空欄位不覆蓋原本資料。
     */
 
-    // 去除 BOM
     csvText = csvText.replace(/^\uFEFF/, "");
 
     const lines = csvText
@@ -467,52 +488,49 @@ function parseCSVText(csvText) {
     }
 
     const rows = [];
-
-    /*
-        最多只處理前 9 列。
-        對應：
-        第 1 測回 高點、平點、參點
-        第 2 測回 高點、平點、參點
-        第 3 測回 高點、平點、參點
-    */
     const maxRows = 9;
-    const importLineCount = Math.min(lines.length, maxRows);
 
-    for (let i = 0; i < importLineCount; i++) {
-        const values = parseCSVLine(lines[i])
-            .map(v => v.trim());
+    for (let i = 0; i < lines.length; i++) {
+        if (rows.length >= maxRows) {
+            break;
+        }
+
+        let values = parseCSVLine(lines[i]).map(v => v.trim());
 
         /*
-            每列最多處理前 12 欄。
-
-            0  hFace1 度
-            1  hFace1 分
-            2  hFace1 秒
-
-            3  hFace2 度
-            4  hFace2 分
-            5  hFace2 秒
-
-            6  zFace1 度
-            7  zFace1 分
-            8  zFace1 秒
-
-            9  zFace2 度
-            10 zFace2 分
-            11 zFace2 秒
+            略過表頭列。
+            例如：
+            回數,照準點,H_P_degree,...
         */
-        const maxCols = 12;
+        const firstCell = values[0] || "";
+        const hasHeader =
+            firstCell === "回數" ||
+            firstCell.toLowerCase() === "round" ||
+            values.some(v => v.toLowerCase && v.toLowerCase().includes("degree"));
+
+        if (hasHeader) {
+            continue;
+        }
+
+        /*
+            支援匯出版 14 欄：
+            前兩欄是 回數、照準點。
+            真正觀測值在第 3 欄到第 14 欄。
+        */
+        if (values.length >= 14) {
+            values = values.slice(2, 14);
+        } else {
+            /*
+                純 12 欄格式。
+            */
+            values = values.slice(0, 12);
+        }
+
         const row = [];
 
-        const importColCount = Math.min(values.length, maxCols);
-
-        for (let j = 0; j < importColCount; j++) {
+        for (let j = 0; j < values.length; j++) {
             const value = values[j];
 
-            /*
-                空欄位用 null 表示。
-                後面填表時會跳過，不覆蓋原本資料。
-            */
             if (value === "") {
                 row.push(null);
                 continue;
@@ -528,9 +546,6 @@ function parseCSVText(csvText) {
             row.push(num);
         }
 
-        /*
-            如果該列完全沒有有效資料，就略過。
-        */
         if (row.some(v => v !== null)) {
             rows.push(row);
         }
@@ -541,24 +556,25 @@ function parseCSVText(csvText) {
         return null;
     }
 
-    /*
-        如果超過 9 列，不阻擋，只提醒。
-    */
-    if (lines.length > maxRows) {
-        alert(`CSV 共有 ${lines.length} 列，目前表格最多匯入 9 列，將只匯入前 9 列。`);
+    if (rows.length > maxRows) {
+        alert(`CSV 可匯入資料超過 ${maxRows} 列，目前只匯入前 ${maxRows} 列。`);
     }
 
     return rows;
 }
 
+
 function parseCSVLine(line) {
     /*
-        支援一般 CSV 欄位解析。
-        可處理：
-        1,2,3
-        "1","2","3"
-        "1,000",2,3
+        支援：
+        1. 標準 CSV 逗號分隔
+        2. Excel / 網頁表格複製的 Tab 分隔
+        3. 雙引號欄位
     */
+
+    if (!line.includes(",") && line.includes("\t")) {
+        return line.split("\t");
+    }
 
     const result = [];
     let value = "";
@@ -587,6 +603,7 @@ function parseCSVLine(line) {
 
     return result;
 }
+
 
 function fillTableFromCSVRows(rows) {
     /*
@@ -863,7 +880,11 @@ function dmsToSeconds(d, m, s) {
     if (d === null || m === null || s === null) return null;
 
     const sign = d < 0 ? -1 : 1;
-    return sign * (Math.abs(d) * 3600 + Math.abs(m) * 60 + Math.abs(s));
+    return sign * (
+    Math.abs(d) * SEC_PER_DEGREE +
+    Math.abs(m) * SEC_PER_MINUTE +
+    Math.abs(s)
+);
 }
 
 function getAngleSeconds(group, r, pKey) {
@@ -874,16 +895,16 @@ function getAngleSeconds(group, r, pKey) {
 }
 
 function normalize360(sec) {
-    const full = 360 * 3600;
+    const full = SEC_PER_CIRCLE;
     sec = sec % full;
     if (sec < 0) sec += full;
     return sec;
 }
 
 function normalize180(sec) {
-    const full = 360 * 3600;
+    const full = SEC_PER_CIRCLE;
     sec = normalize360(sec);
-    if (sec > 180 * 3600) sec -= full;
+    if (sec > SEC_180) sec -= full;
     return sec;
 }
 
@@ -893,11 +914,11 @@ function secondsToDMS(sec) {
     const sign = sec < 0 ? "-" : "+";
     sec = Math.abs(sec);
 
-    const d = Math.floor(sec / 3600);
-    sec -= d * 3600;
+    const d = Math.floor(sec / SEC_PER_DEGREE);
+    sec -= d * SEC_PER_DEGREE;
+    const m = Math.floor(sec / SEC_PER_MINUTE);
+    const s = sec - m * SEC_PER_MINUTE;
 
-    const m = Math.floor(sec / 60);
-    const s = sec - m * 60;
 
     if (d > 0) {
         return `${sign}${d}° ${m}' ${s.toFixed(2)}"`;
@@ -931,16 +952,32 @@ function stddev(arr) {
     return Math.sqrt(sum / (valid.length - 1));
 }
 function standardError(arr) {
+    /*
+        顯示用 +/-：
+
+        目前依標準答案比對，採用樣本標準誤：
+
+            SE = s / sqrt(n)
+
+        注意：
+        這不是 t 分布 95% 信賴區間半寬。
+        若未來要改成真正 95% 信賴區間，可改用 confidence95HalfWidth()。
+    */
     const valid = validNumbers(arr);
+
     if (valid.length < 2) {
         return 0;
     }
+
     const s = stddev(valid);
+
     if (s === null || isNaN(s)) {
         return 0;
     }
+
     return s / Math.sqrt(valid.length);
 }
+
 
 /* =========================
    B 版本計算用輔助函式
@@ -1018,28 +1055,41 @@ function getFaceAngle(group, r, fromKey, toKey) {
     return normalize180(to - from);
 }
 function getCollimationValueForB(r, pKey) {
-    /*
-        照準軸誤差 C，B 版本算法。
-        對每一測回、每一點計算：
-            q = H倒 - H正 - 180°
-        再轉為照準軸誤差：
-            C = -q / 4
-        等價於：
-            C = [H正 - (H倒 - 180°)] / 4
-        單位：秒。
-    */
+     /*
+         取得第 1 測回的水平正倒鏡半差。
+     
+         q = H倒 - H正 - 180°
+         halfError = q / 2
+     
+         注意：
+         這裡的 halfError 不是照準軸誤差 C。
+         目前 C 的定義為：
+     
+             C = -q / 2
+     
+         所以：
+     
+             halfError = -C
+     */
+
     const h1 = getAngleSeconds("hFace1", r, pKey); // 正鏡水平讀數
     const h2 = getAngleSeconds("hFace2", r, pKey); // 倒鏡水平讀數
     if (h1 === null || h2 === null) {
         return null;
     }
-    const q = normalize180(h2 - h1 - 180 * 3600);
+    const q = normalize180(h2 - h1 - SEC_180);
     return -q / 2;
 }
 function getAllCollimationValuesForB() {
     /*
         照準軸誤差 C：
-        只使用平點 level 的 3 測回。
+        目前採用標準答案比對版本：
+        只使用「平點 level」的 3 測回。
+        C candidates：
+            第 1 測回平點 C
+            第 2 測回平點 C
+            第 3 測回平點 C
+        最後取平均值與標準誤。
     */
     const values = [];
     for (let r = 1; r <= 3; r++) {
@@ -1049,6 +1099,32 @@ function getAllCollimationValuesForB() {
         }
     }
     return values;
+}
+
+function debugCollimationLevel() {
+    if (!DEBUG_MODE) return;
+    console.log("===== C level debug =====");
+    for (let r = 1; r <= 3; r++) {
+        const hp = getAngleSeconds("hFace1", r, "level");
+        const hr = getAngleSeconds("hFace2", r, "level");
+        if (hp === null || hr === null) {
+            console.log(`r${r}: missing data`);
+            continue;
+        }
+        const q = normalize180(hr - hp - SEC_180);
+        const c = -q / 2;
+        console.log({
+            round: r,
+            hp,
+            hr,
+            q,
+            c
+        });
+    }
+    const cValues = getAllCollimationValuesForB();
+    console.log("C candidates =", cValues);
+    console.log("C mean =", average(cValues));
+    console.log("C +/- =", standardError(cValues));
 }
 
 function getHorizontalPrecisionHForB() {
@@ -1180,7 +1256,30 @@ function getIaxisCandidatesForB() {
     return candidates;
 }
 
-
+function debugCollimationLevel() {
+    console.log("===== C level debug =====");
+    for (let r = 1; r <= 3; r++) {
+        const hp = getAngleSeconds("hFace1", r, "level");
+        const hr = getAngleSeconds("hFace2", r, "level");
+        if (hp === null || hr === null) {
+            console.log(`r${r}: missing data`);
+            continue;
+        }
+        const q = normalize180(hr - hp - 180 * 3600);
+        const c = -q / 2;
+        console.log({
+            round: r,
+            hp,
+            hr,
+            q,
+            c
+        });
+    }
+    const cValues = getAllCollimationValuesForB();
+    console.log("C candidates =", cValues);
+    console.log("C mean =", average(cValues));
+    console.log("C +/- =", standardError(cValues));
+}
 
 
 function populationStddev(arr) {
@@ -1230,7 +1329,7 @@ function valueText(value) {
 }
 
 function radFromSec(sec) {
-    return sec / 3600 * Math.PI / 180;
+    return sec / SEC_PER_DEGREE * Math.PI / 180;
 }
 
 /* =========================
@@ -1267,7 +1366,7 @@ function getVerticalIndexError(r, pKey) {
     if (z1 === null || z2 === null) return null;
 
     // I = (Z正 + Z倒 - 360°) / 2
-    return (z1 + z2 - 360 * 3600) / 2;
+    return (z1 + z2 - SEC_PER_CIRCLE) / 2;
 }
 
 function getMeanZenith(r, pKey) {
@@ -1277,7 +1376,7 @@ function getMeanZenith(r, pKey) {
     if (z1 === null || z2 === null) return null;
 
     // 倒鏡天頂距轉為正鏡同系統：360° - Z倒
-    const z2Converted = 360 * 3600 - z2;
+    const z2Converted = SEC_PER_CIRCLE - z2;
     return (z1 + z2Converted) / 2;
 }
 
@@ -1286,7 +1385,7 @@ function getVerticalAngle(r, pKey) {
     if (zenith === null) return null;
 
     // 垂直角 = 90° - 天頂距
-    return 90 * 3600 - zenith;
+    return SEC_90 - zenith;
 }
 
 function getHorizontalAngle(r, fromKey, toKey) {
@@ -1297,52 +1396,57 @@ function getHorizontalAngle(r, fromKey, toKey) {
 
     return normalize180(to - from);
 }
+function getCurrentInstrumentAccuracy() {
+    return Number(document.getElementById("instrumentAccuracy").value) || 1;
+}
+
+
+function getInstrumentLimits(accuracy) {
+    /*
+        儀器精度門檻公式：
+
+        C 門檻 = 14 + 儀器精度 × 2
+        i 門檻 = 12 + 儀器精度 × 4
+        I 門檻 = 14 + 儀器精度 × 2
+        H 門檻 = 儀器精度 × 2
+    */
+    return {
+        cLimit: 14 + accuracy * 2,
+        iAxisLimit: 12 + accuracy * 4,
+        vIndexLimit: 14 + accuracy * 2,
+        hLimit: accuracy * 2
+    };
+}
+
+function applyInstrumentLimits() {
+    const accuracy = getCurrentInstrumentAccuracy();
+    const limits = getInstrumentLimits(accuracy);
+
+    document.getElementById("limitC").value = limits.cLimit;
+    document.getElementById("limitIaxis").value = limits.iAxisLimit;
+    document.getElementById("limitVindex").value = limits.vIndexLimit;
+    document.getElementById("limitH").value = limits.hLimit;
+
+    document.getElementById("instrumentLimitText").textContent = limits.hLimit;
+
+    return limits;
+}
 
 /* =========================
    主計算
 ========================= */
 function syncInstrumentAccuracy() {
-    const accuracy = Number(document.getElementById("instrumentAccuracy").value);
-    // 一測回水平角精度門檻值 = 儀器精度 × 2
-    const hLimit = accuracy * 2;
-    document.getElementById("limitH").value = hLimit;
-    document.getElementById("instrumentLimitText").textContent = hLimit;
+    applyInstrumentLimits();
 }
-
 function calculate() {
     const warnings = [];
 
     /*
         =========================
-        B 版本計算方向
+        0. 備註條件檢查
         =========================
-
-        1. 照準軸誤差 C：
-           使用 3 測回 × 3 點的正倒鏡水平讀數差。
-               q = H倒 - H正 - 180°
-               C = -q / 4
-           最後取 9 筆 C 平均值。
-           +/- 使用 95% 信賴區間半寬。
-
-        2. 橫軸誤差 i：
-           使用正鏡與倒鏡的水平角差，
-           配合高點與平點、參點的垂直角差推算。
-
-        3. 垂直指標誤差 I：
-           使用平點、參點，不使用高點：
-            I = (Z正 + Z倒 - 360°) / 2
-
-
-        4. 一測回水平角精度 H：
-           使用正鏡水平讀數，
-           以平點為基準，
-           計算高點角、參點角在三測回中的殘差。
-    */
-
-    /*
-        =========================
-        備註條件檢查
-        =========================
+        1. 平點與參點垂直角需在 ±3° 內。
+        2. 高點垂直角需大於 10°。
     */
 
     for (let r = 1; r <= 3; r++) {
@@ -1350,15 +1454,15 @@ function calculate() {
         const vLevel = getVerticalAngle(r, "level");
         const vRef = getVerticalAngle(r, "ref");
 
-        if (vLevel !== null && Math.abs(vLevel) > 3 * 3600) {
+        if (vLevel !== null && Math.abs(vLevel) > 3 * SEC_PER_DEGREE) {
             warnings.push(`第 ${r} 測回：平點垂直角超過 ±3°。`);
         }
 
-        if (vRef !== null && Math.abs(vRef) > 3 * 3600) {
+        if (vRef !== null && Math.abs(vRef) > 3 * SEC_PER_DEGREE) {
             warnings.push(`第 ${r} 測回：參點垂直角超過 ±3°。`);
         }
 
-        if (vHigh !== null && Math.abs(vHigh) <= 10 * 3600) {
+        if (vHigh !== null && Math.abs(vHigh) <= 10 * SEC_PER_DEGREE) {
             warnings.push(`第 ${r} 測回：高點垂直角未大於 10°。`);
         }
     }
@@ -1367,77 +1471,70 @@ function calculate() {
         =========================
         1. 照準軸誤差 C
         =========================
+        目前標準答案比對版本：
+        使用平點 level 的 3 測回。
+
+        q = H倒 - H正 - 180°
+        C = -q / 2
     */
 
     const cValues = getAllCollimationValuesForB();
     const C = average(cValues);
     const Csd = standardError(cValues);
-    //console.log("C values =", cValues);
-    //console.log("C mean =", C);
-    //console.log("C +/- =", Csd);
-/* =========================
-   2. 橫軸誤差 i
-========================= */
-const iCandidates = getIaxisCandidatesForB();
-const Iaxis = average(iCandidates);
-const IaxisSd = standardError(iCandidates);
-//console.log("iCandidates =", iCandidates);
-//console.log("Iaxis =", Iaxis);
-//console.log("IaxisSd =", IaxisSd);
-/*
-    =========================
-    3. 垂直指標誤差 I
-    =========================
 
-    B 網頁算法：
+    debugCollimationLevel();
 
-    使用平點、參點，不使用高點。
+    /*
+        =========================
+        2. 橫軸誤差 i
+        =========================
+        使用平點 -> 高點之正倒鏡水平角差，
+        並加入照準軸誤差 C 修正。
+    */
 
-    每筆：
+    const iCandidates = getIaxisCandidatesForB();
+    const Iaxis = average(iCandidates);
+    const IaxisSd = standardError(iCandidates);
+
+    /*
+        =========================
+        3. 垂直指標誤差 I
+        =========================
+        使用平點、參點，不使用高點。
+
         I = (Z正 + Z倒 - 360°) / 2
+    */
 
-    共 6 筆：
-        第 1 測回平點、參點
-        第 2 測回平點、參點
-        第 3 測回平點、參點
+    const vIndexCandidates = [];
 
-    平均值：
-        6 筆 I 平均
+    for (let r = 1; r <= 3; r++) {
+        const vIndexLevel = getVerticalIndexError(r, "level");
+        const vIndexRef = getVerticalIndexError(r, "ref");
 
-    +/-：
-        樣本標準差 / sqrt(6)
-*/
+        if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
+            vIndexCandidates.push(vIndexLevel);
+        }
 
-const vIndexCandidates = [];
-
-for (let r = 1; r <= 3; r++) {
-    const vIndexLevel = getVerticalIndexError(r, "level");
-    const vIndexRef = getVerticalIndexError(r, "ref");
-
-    if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
-        vIndexCandidates.push(vIndexLevel);
+        if (vIndexRef !== null && !isNaN(vIndexRef)) {
+            vIndexCandidates.push(vIndexRef);
+        }
     }
 
-    if (vIndexRef !== null && !isNaN(vIndexRef)) {
-        vIndexCandidates.push(vIndexRef);
-    }
-}
-
-const Vindex = average(vIndexCandidates);
-const VindexSd = standardError(vIndexCandidates);
-
+    const Vindex = average(vIndexCandidates);
+    const VindexSd = standardError(vIndexCandidates);
 
     /*
         =========================
         4. 一測回水平角精度 H
         =========================
+        使用正倒鏡平均後之水平方向。
     */
 
     const H = getHorizontalPrecisionHForB();
 
     /*
         =========================
-        顯示結果
+        5. 顯示結果
         =========================
     */
 
@@ -1448,32 +1545,41 @@ const VindexSd = standardError(vIndexCandidates);
 
     /*
         =========================
-        儀器精度門檻
+        6. 儀器精度門檻
         =========================
     */
 
-    const instrumentAccuracy = Number(document.getElementById("instrumentAccuracy").value);
-    const hLimit = instrumentAccuracy * 2;
+    const {
+        cLimit,
+        iAxisLimit,
+        vIndexLimit,
+        hLimit
+    } = applyInstrumentLimits();
 
-    document.getElementById("limitH").value = hLimit;
-    document.getElementById("instrumentLimitText").textContent = hLimit;
+    /*
+        =========================
+        7. 判定
+        =========================
+    */
 
-/*
-    =========================
-    判定
-    =========================
-*/
+    judgeAbs("judgeC", C, cLimit);
+    judgeAbs("judgeIaxis", Iaxis, iAxisLimit);
+    judgeAbs("judgeVindex", Vindex, vIndexLimit);
 
-judgeAbs("judgeC", C, Number(document.getElementById("limitC").value));
-judgeAbs("judgeIaxis", Iaxis, Number(document.getElementById("limitIaxis").value));
-judgeAbs("judgeVindex", Vindex, Number(document.getElementById("limitVindex").value));
+    judgeLess("judgeH", roundForJudge(H, 0), hLimit);
+    judgeLess("judgeInstrument", roundForJudge(H, 0), hLimit);
 
-judgeLess("judgeH", roundForJudge(H, 1), hLimit);
-judgeLess("judgeInstrument", roundForJudge(H, 1), hLimit);
+    /*
+        =========================
+        8. 顯示備註警告
+        =========================
+    */
 
-showWarnings(warnings);
-
+    showWarnings(warnings);
 }
+
+
+
 
 /* =========================
    依第 1 測回生成第 2、3 測回
@@ -1653,13 +1759,14 @@ function generateFromFirstRound() {
     const targetRounds = [
         {
             round: 2,
-            levelFace1: 60 * 3600
+            levelFace1: 60 * SEC_PER_DEGREE
         },
         {
             round: 3,
-            levelFace1: 120 * 3600
+            levelFace1: 120 * SEC_PER_DEGREE
         }
     ];
+
 
     targetRounds.forEach(item => {
         const r = item.round;
@@ -1726,16 +1833,14 @@ function generateFromFirstRound() {
         const vRef = getVerticalAngle(1, "ref");
 
         let denominator = null;
-
         if (vHigh !== null && vLevel !== null && vRef !== null) {
-            const sinHigh = Math.sin(radFromSec(vHigh));
-            const sinLevel = Math.sin(radFromSec(vLevel));
+            const tanHigh = Math.tan(radFromSec(vHigh));
+            const tanLevel = Math.tan(radFromSec(vLevel));
             const tanRef = Math.tan(radFromSec(vRef));
             const tanBase = average([tanLevel, tanRef]);
-
             denominator = tanHigh - tanBase;
         }
-
+        
         const baseHalf = generatedCRoundMean + randomSigned(randomNoiseMax);
 
         /*
@@ -1890,7 +1995,7 @@ function readDMSSeconds(group, r, p) {
         return null;
     }
 
-    return d * 3600 + m * 60 + s;
+    return d * SEC_PER_DEGREE + m * SEC_PER_MINUTE + s;
 }
 
 function setDMSSeconds(group, r, p, totalSeconds) {
@@ -1898,10 +2003,11 @@ function setDMSSeconds(group, r, p, totalSeconds) {
 
     totalSeconds = Math.round(totalSeconds);
 
-    const d = Math.floor(totalSeconds / 3600);
-    const rem1 = totalSeconds - d * 3600;
-    const m = Math.floor(rem1 / 60);
-    const s = rem1 - m * 60;
+    const d = Math.floor(totalSeconds / SEC_PER_DEGREE);
+    const rem1 = totalSeconds - d * SEC_PER_DEGREE;
+    const m = Math.floor(rem1 / SEC_PER_MINUTE);
+    const s = rem1 - m * SEC_PER_MINUTE;
+
 
     const dEl = document.getElementById(`${group}_${r}_${p}_d`);
     const mEl = document.getElementById(`${group}_${r}_${p}_m`);
@@ -1915,7 +2021,7 @@ function setDMSSeconds(group, r, p, totalSeconds) {
 }
 
 function normalize360Seconds(sec) {
-    const full = 360 * 3600;
+    const full = SEC_PER_CIRCLE;
 
     sec = sec % full;
 
@@ -1963,7 +2069,7 @@ function setHorizontalFace2ByHalfError(r, p, hFace1Seconds, halfErrorSeconds) {
     const twoC = Math.round(halfErrorSeconds * 2);
 
     const hFace2Seconds = normalize360Seconds(
-        hFace1Seconds + 180 * 3600 + twoC
+        hFace1Seconds + SEC_180 + twoC
     );
 
     setDMSSeconds("hFace2", r, p, hFace2Seconds);
@@ -1992,7 +2098,7 @@ function setHorizontalFace2ByHalfErrorWithNoise(
     const twoC = Math.round(halfErrorSeconds * 2);
 
     const hFace2Seconds = normalize360Seconds(
-        hFace1Seconds + 180 * 3600 + twoC + face2NoiseSeconds
+        hFace1Seconds + SEC_180 + twoC + face2NoiseSeconds
     );
 
     setDMSSeconds("hFace2", r, p, hFace2Seconds);
@@ -2030,9 +2136,9 @@ function generateVerticalForPoint(
     let zFace1Base = readDMSSeconds("zFace1", 1, p);
     if (zFace1Base === null) {
         if (p === "high") {
-            zFace1Base = 70 * 3600;
+            zFace1Base = 70 * SEC_PER_DEGREE;
         } else {
-            zFace1Base = 90 * 3600;
+            zFace1Base = SEC_90;
         }
     }
     /*
@@ -2058,7 +2164,7 @@ function generateVerticalForPoint(
     const indexError = targetIndexError + randomSigned(randomNoiseMax);
     const twoI = Math.round(indexError * 2);
     const zFace2 = normalize360Seconds(
-        360 * 3600 - zFace1 + twoI
+        SEC_PER_CIRCLE - zFace1 + twoI
     );
     setDMSSeconds("zFace2", r, p, zFace2);
 }
@@ -2079,15 +2185,16 @@ function estimateRoundIaxisFromHalfErrors(r, halfHigh, halfLevel, halfRef) {
     const baseHalf = average([halfLevel, halfRef]);
 
     if (
-        halfHigh === null ||
-        halfHigh === null ||
-        baseHalf === null ||
-        vHigh === null ||
-        vLevel === null ||
-        vRef === null
-    ) {
-        return null;
-    }
+         halfHigh === null ||
+         halfLevel === null ||
+         halfRef === null ||
+         baseHalf === null ||
+         vHigh === null ||
+         vLevel === null ||
+         vRef === null
+     ) {
+         return null;
+     }
 
     const tanHigh = Math.tan(radFromSec(vHigh));
     const tanLevel = Math.tan(radFromSec(vLevel));
