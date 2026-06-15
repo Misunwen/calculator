@@ -334,12 +334,12 @@
 <div class="note">
     <strong>計算模式說明：</strong><br>
     1. 角度輸入格式為「度、分、秒」，程式會自動換算成秒數計算。<br>
-    2. 照準軸誤差 C 目前採用平點之 3 測回正倒鏡水平讀數差：q = H倒 − H正 − 180°，C = −q / 2，並取平均值與標準誤。<br>
-    3. 橫軸誤差 i 使用正鏡與倒鏡之水平角差，配合高點與平點、參點之垂直角差推算。<br>
-    4. 垂直指標誤差 I 採用平點：I =（正鏡天頂距 + 倒鏡天頂距 − 360°）/2。<br>
-    5. 一測回水平角精度 H 使用正倒鏡平均後之水平方向，以平點為基準，計算高點角與參點角在三測回中的殘差。<br>
+    2. 照準軸誤差 C 採用歸算方向值：Ck = (正鏡高點 − 正鏡參點) − (倒鏡高點 − 倒鏡參點)，再取三測回平均值。<br>
+    3. 橫軸誤差 i 採用盤左盤右差 d = H正 − H倒 + 180°，並以 i = (d高 − d參) / [2 × (tanα高 − tanα參)] 計算。<br>
+    4. 垂直指標誤差 I 只採用平點：I =（正鏡平點天頂距 + 倒鏡平點天頂距 − 360°）/2。<br>
+    5. 一測回水平角精度 H 採用 Ck 三個歸算方向差值的樣本標準差。<br>
     6. H 判定門檻值為儀器精度的 2 倍。<br>
-    7. 計算數據格式中，「平均值 +/- 誤差值」對應表格範例顯示方式。
+    7. 計算數據格式中，「平均值 +/- 誤差值」之 +/- 採樣本標準誤顯示。
 </div>
 
 <script>
@@ -1082,204 +1082,191 @@ function getCollimationValueForB(r, pKey) {
 }
 function getAllCollimationValuesForB() {
     /*
-        照準軸誤差 C：
-        目前採用標準答案比對版本：
-        只使用「平點 level」的 3 測回。
-        C candidates：
-            第 1 測回平點 C
-            第 2 測回平點 C
-            第 3 測回平點 C
-        最後取平均值與標準誤。
+        照準軸誤差 C
+        使用 ISO / 內政部規範的歸算方向值 Reduced Directions。
+
+        每一測回：
+
+            Ck = (H_L_high - H_L_ref) - (H_R_high - H_R_ref)
+
+        H_L = 正鏡 hFace1
+        H_R = 倒鏡 hFace2
+
+        注意：
+        1. 不使用平點 level。
+        2. 不使用 q = H倒 - H正 - 180°。
+        3. 不除以 2。
+        4. 倒鏡的 180° 常數會在方向差中自動抵消。
     */
+
     const values = [];
+
     for (let r = 1; r <= 3; r++) {
-        const c = getCollimationValueForB(r, "level");
-        if (c !== null && !isNaN(c)) {
-            values.push(c);
+        const leftHigh = getAngleSeconds("hFace1", r, "high");
+        const leftRef = getAngleSeconds("hFace1", r, "ref");
+
+        const rightHigh = getAngleSeconds("hFace2", r, "high");
+        const rightRef = getAngleSeconds("hFace2", r, "ref");
+
+        if (
+            leftHigh === null ||
+            leftRef === null ||
+            rightHigh === null ||
+            rightRef === null
+        ) {
+            continue;
+        }
+
+        const leftReduced = normalize180(leftHigh - leftRef);
+        const rightReduced = normalize180(rightHigh - rightRef);
+
+        const cValue = normalize180(leftReduced - rightReduced);
+
+        if (!isNaN(cValue) && isFinite(cValue)) {
+            values.push(cValue);
         }
     }
+
     return values;
 }
 
-function debugCollimationLevel() {
-    if (!DEBUG_MODE) return;
-    console.log("===== C level debug =====");
-    for (let r = 1; r <= 3; r++) {
-        const hp = getAngleSeconds("hFace1", r, "level");
-        const hr = getAngleSeconds("hFace2", r, "level");
-        if (hp === null || hr === null) {
-            console.log(`r${r}: missing data`);
-            continue;
-        }
-        const q = normalize180(hr - hp - SEC_180);
-        const c = -q / 2;
-        console.log({
-            round: r,
-            hp,
-            hr,
-            q,
-            c
-        });
-    }
-    const cValues = getAllCollimationValuesForB();
-    console.log("C candidates =", cValues);
-    console.log("C mean =", average(cValues));
-    console.log("C +/- =", standardError(cValues));
-}
+
+
 
 function getHorizontalPrecisionHForB() {
     /*
-        一測回水平角精度 H，標準答案校正版。
+        一測回水平角精度 H
 
-        使用正倒鏡平均後的水平方向。
+        依第四張圖：
 
-        每測回以平點為基準，計算兩組水平角：
+            H = Ck 的樣本標準差
 
-            高點角 = 高點平均水平方向 - 平點平均水平方向
-            參點角 = 參點平均水平方向 - 平點平均水平方向
+        其中 Ck 是：
 
-        三測回形成兩組角度序列：
+            Ck = (H_L_high - H_L_ref) - (H_R_high - H_R_ref)
 
-            平點 -> 高點
-            平點 -> 參點
-
-        對每組角度求平均與殘差。
-
-        H = sqrt( Σv² / Σ(n_i - 1) )
-
-        單位：秒。
+        例如：
+            Ck = [-5, +1, 0]
+            H = sample standard deviation(Ck)
+              ≈ 3.21"
     */
 
-    const angleGroups = [
-        [], // 平點 -> 高點
-        []  // 平點 -> 參點
-    ];
+    const cValues = getAllCollimationValuesForB();
+
+    return stddev(cValues);
+}
+
+function getVerticalIndexValuesForB() {
+    /*
+        垂直指標誤差 I
+
+        只使用平點 level：
+
+            Ik = (Z_L_level + Z_R_level - 360°) / 2
+
+        不使用高點 high。
+        不使用參點 ref。
+    */
+
+    const values = [];
 
     for (let r = 1; r <= 3; r++) {
-        const angleHigh = getHorizontalAngle(r, "level", "high");
-        const angleRef = getHorizontalAngle(r, "level", "ref");
+        const zLeftLevel = getAngleSeconds("zFace1", r, "level");
+        const zRightLevel = getAngleSeconds("zFace2", r, "level");
 
-        if (angleHigh !== null && !isNaN(angleHigh)) {
-            angleGroups[0].push(angleHigh);
+        if (zLeftLevel === null || zRightLevel === null) {
+            continue;
         }
 
-        if (angleRef !== null && !isNaN(angleRef)) {
-            angleGroups[1].push(angleRef);
+        const value = normalize180(
+            zLeftLevel + zRightLevel - SEC_PER_CIRCLE
+        ) / 2;
+
+        if (!isNaN(value) && isFinite(value)) {
+            values.push(value);
         }
     }
 
-    let sumResidualSquare = 0;
-    let degreeOfFreedom = 0;
-
-    angleGroups.forEach(group => {
-        const valid = validNumbers(group);
-
-        if (valid.length >= 2) {
-            const mean = average(valid);
-
-            valid.forEach(v => {
-                const residual = normalize180(v - mean);
-                sumResidualSquare += residual * residual;
-            });
-
-            degreeOfFreedom += valid.length - 1;
-        }
-    });
-
-    if (degreeOfFreedom <= 0) {
-        return null;
-    }
-
-    return Math.sqrt(sumResidualSquare / degreeOfFreedom);
+    return values;
 }
+
+
 
 function getIaxisCandidatesForB() {
     /*
-        橫軸誤差 i，B 標準答案校正版。
+        橫軸誤差 i
 
-        使用「平點 -> 高點」。
-        保留正負號。
-        使用 sin 分母。
-        加入照準軸誤差 C 的 sec 修正。
+        公式：
 
-        delta = 正鏡水平角 - 倒鏡水平角
+            d = H_L - H_R + 180°
 
-        C 修正：
-            correctedDelta = delta - C × (sec(V高) - sec(V平))
+            i = (d_high - d_ref)
+                / [2 × (tan(alpha_high) - tan(alpha_ref))]
 
-        i =
-            correctedDelta / [2 × (sin(V高) - sin(V平))]
+        其中：
+            alpha = 90° - Z
+                  = 垂直角 / 仰角
 
-        單位：秒。
+        本程式使用 getVerticalAngle() 取得 alpha。
+        getVerticalAngle() 會用正倒鏡平均後的天頂距，較穩定。
     */
 
-    const candidates = [];
-
-    // 取得照準軸誤差 C，單位秒
-    const cValues = getAllCollimationValuesForB();
-    const C = average(cValues) || 0;
+    const values = [];
 
     for (let r = 1; r <= 3; r++) {
-        const vHigh = getVerticalAngle(r, "high");
-        const vLevel = getVerticalAngle(r, "level");
+        const dHigh = getLeftRightFaceDifferenceForI(r, "high");
+        const dRef = getLeftRightFaceDifferenceForI(r, "ref");
 
-        if (vHigh === null || vLevel === null) {
+        const alphaHigh = getVerticalAngle(r, "high");
+        const alphaRef = getVerticalAngle(r, "ref");
+
+        if (
+            dHigh === null ||
+            dRef === null ||
+            alphaHigh === null ||
+            alphaRef === null
+        ) {
             continue;
         }
 
-        const angleP = getFaceAngle("hFace1", r, "level", "high");
-        const angleR = getFaceAngle("hFace2", r, "level", "high");
+        const tanHigh = Math.tan(radFromSec(alphaHigh));
+        const tanRef = Math.tan(radFromSec(alphaRef));
 
-        if (angleP === null || angleR === null) {
-            continue;
-        }
-
-        const sinHigh = Math.sin(radFromSec(vHigh));
-        const sinLevel = Math.sin(radFromSec(vLevel));
-
-        const denominator = 2 * (sinHigh - sinLevel);
+        const denominator = 2 * (tanHigh - tanRef);
 
         if (Math.abs(denominator) < 0.000001) {
             continue;
         }
 
-        const delta = normalize180(angleP - angleR);
+        const numerator = normalize180(dHigh - dRef);
 
-        const secHigh = 1 / Math.cos(radFromSec(vHigh));
-        const secLevel = 1 / Math.cos(radFromSec(vLevel));
+        const iValue = numerator / denominator;
 
-        const correctedDelta = delta - C * (secHigh - secLevel);
-
-        candidates.push(correctedDelta / denominator);
+        if (!isNaN(iValue) && isFinite(iValue)) {
+            values.push(iValue);
+        }
     }
 
-    return candidates;
+    return values;
 }
+
+
 
 function debugCollimationLevel() {
-    console.log("===== C level debug =====");
-    for (let r = 1; r <= 3; r++) {
-        const hp = getAngleSeconds("hFace1", r, "level");
-        const hr = getAngleSeconds("hFace2", r, "level");
-        if (hp === null || hr === null) {
-            console.log(`r${r}: missing data`);
-            continue;
-        }
-        const q = normalize180(hr - hp - 180 * 3600);
-        const c = -q / 2;
-        console.log({
-            round: r,
-            hp,
-            hr,
-            q,
-            c
-        });
-    }
+    if (!DEBUG_MODE) return;
+
+    console.log("===== C / H reduced direction debug =====");
+
     const cValues = getAllCollimationValuesForB();
+
     console.log("C candidates =", cValues);
     console.log("C mean =", average(cValues));
-    console.log("C +/- =", standardError(cValues));
+    console.log("C standard error =", standardError(cValues));
+    console.log("H sample standard deviation =", stddev(cValues));
 }
+
+
+
 
 
 function populationStddev(arr) {
@@ -1345,6 +1332,97 @@ function getHorizontalFaceDifference(r, pKey) {
     // 倒鏡 - 正鏡 - 180°
     return normalize180(h2 - h1 - 180 * 3600);
 }
+function getLeftRightFaceDifferenceForI(r, pKey) {
+    /*
+        橫軸誤差 i 使用的盤左盤右差：
+
+            d = H_L - H_R + 180°
+
+        H_L = 正鏡 hFace1
+        H_R = 倒鏡 hFace2
+
+        單位：秒。
+    */
+
+    const hLeft = getAngleSeconds("hFace1", r, pKey);
+    const hRight = getAngleSeconds("hFace2", r, pKey);
+
+    if (hLeft === null || hRight === null) {
+        return null;
+    }
+
+    return normalize180(hLeft - hRight + SEC_180);
+}
+
+function getHorizontalHalfDifferenceForStandard(r, pKey) {
+    /*
+        正確版反推用水平半差。
+
+        q = H倒 - H正 - 180°
+        half = q / 2
+
+        注意：
+        這裡使用 q / 2，
+        不再使用原本 C = -q / 2 的符號。
+    */
+
+    const q = getHorizontalFaceDifference(r, pKey);
+
+    if (q === null || isNaN(q)) {
+        return null;
+    }
+
+    return q / 2;
+}
+
+function getSingleFaceHorizontalAngle(r, faceGroup, fromKey, toKey) {
+    /*
+        單一鏡位水平角：
+        angle = to - from
+
+        faceGroup:
+            hFace1 = 正鏡
+            hFace2 = 倒鏡
+    */
+
+    const from = getAngleSeconds(faceGroup, r, fromKey);
+    const to = getAngleSeconds(faceGroup, r, toKey);
+
+    if (from === null || to === null) {
+        return null;
+    }
+
+    return normalize180(to - from);
+}
+
+function standard95ForThreeValues(arr) {
+    /*
+        給 C 顯示用。
+
+        從正確版反推：
+        C 的 +/- 比較接近 2 × 樣本標準差，
+        不是原本的 SE = s / sqrt(n)。
+
+        這組資料：
+            high half = 1, -1, -1
+            s ≈ 1.1547
+            2s ≈ 2.3
+    */
+
+    const valid = validNumbers(arr);
+
+    if (valid.length < 2) {
+        return 0;
+    }
+
+    const s = stddev(valid);
+
+    if (s === null || isNaN(s)) {
+        return 0;
+    }
+
+    return 2 * s;
+}
 
 function getMeanHorizontalDirection(r, pKey) {
     const h1 = getAngleSeconds("hFace1", r, pKey);
@@ -1396,6 +1474,25 @@ function getHorizontalAngle(r, fromKey, toKey) {
 
     return normalize180(to - from);
 }
+function getSingleFaceHorizontalAngle(r, faceGroup, fromKey, toKey) {
+    /*
+        取得單一鏡位的水平角。
+        例如：
+        faceGroup = "hFace1" 表示正鏡
+        faceGroup = "hFace2" 表示倒鏡
+        angle = to - from
+        正確版反推重點：
+        H 不只看正倒鏡平均後方向，
+        還會受到正鏡角與倒鏡角是否一致影響。
+    */
+    const from = getAngleSeconds(faceGroup, r, fromKey);
+    const to = getAngleSeconds(faceGroup, r, toKey);
+    if (from === null || to === null) {
+        return null;
+    }
+    return normalize180(to - from);
+}
+
 function getCurrentInstrumentAccuracy() {
     return Number(document.getElementById("instrumentAccuracy").value) || 1;
 }
@@ -1471,11 +1568,10 @@ function calculate() {
         =========================
         1. 照準軸誤差 C
         =========================
-        目前標準答案比對版本：
-        使用平點 level 的 3 測回。
 
-        q = H倒 - H正 - 180°
-        C = -q / 2
+        Ck = (H_L_high - H_L_ref) - (H_R_high - H_R_ref)
+        C  = average(Ck)
+        C± = standard error(Ck)
     */
 
     const cValues = getAllCollimationValuesForB();
@@ -1488,8 +1584,9 @@ function calculate() {
         =========================
         2. 橫軸誤差 i
         =========================
-        使用平點 -> 高點之正倒鏡水平角差，
-        並加入照準軸誤差 C 修正。
+
+        d = H_L - H_R + 180°
+        i = (d_high - d_ref) / [2 × (tanα_high - tanα_ref)]
     */
 
     const iCandidates = getIaxisCandidatesForB();
@@ -1500,26 +1597,13 @@ function calculate() {
         =========================
         3. 垂直指標誤差 I
         =========================
-        使用平點、參點，不使用高點。
 
-        I = (Z正 + Z倒 - 360°) / 2
+        只使用平點 level：
+
+        I = (Z_L_level + Z_R_level - 360°) / 2
     */
 
-    const vIndexCandidates = [];
-
-    for (let r = 1; r <= 3; r++) {
-        const vIndexLevel = getVerticalIndexError(r, "level");
-        const vIndexRef = getVerticalIndexError(r, "ref");
-
-        if (vIndexLevel !== null && !isNaN(vIndexLevel)) {
-            vIndexCandidates.push(vIndexLevel);
-        }
-
-        if (vIndexRef !== null && !isNaN(vIndexRef)) {
-            vIndexCandidates.push(vIndexRef);
-        }
-    }
-
+    const vIndexCandidates = getVerticalIndexValuesForB();
     const Vindex = average(vIndexCandidates);
     const VindexSd = standardError(vIndexCandidates);
 
@@ -1527,7 +1611,8 @@ function calculate() {
         =========================
         4. 一測回水平角精度 H
         =========================
-        使用正倒鏡平均後之水平方向。
+
+        H = Ck 的樣本標準差
     */
 
     const H = getHorizontalPrecisionHForB();
@@ -1566,8 +1651,12 @@ function calculate() {
     judgeAbs("judgeIaxis", Iaxis, iAxisLimit);
     judgeAbs("judgeVindex", Vindex, vIndexLimit);
 
-    judgeLess("judgeH", roundForJudge(H, 0), hLimit);
-    judgeLess("judgeInstrument", roundForJudge(H, 0), hLimit);
+    /*
+        H 是標準差，不看正負。
+        用 1 位小數判定，和畫面顯示一致。
+    */
+    judgeLess("judgeH", roundForJudge(H, 1), hLimit);
+    judgeLess("judgeInstrument", roundForJudge(H, 1), hLimit);
 
     /*
         =========================
@@ -1581,27 +1670,12 @@ function calculate() {
 
 
 
+
 /* =========================
-   依第 1 測回生成第 2、3 測回
+   依第 1 測回生成第 2、3 測回（全整數高仿真人類測量版）
 ========================= */
 
 function generateFromFirstRound() {
-    /*
-        生成邏輯：
-
-        1. 讀取第 1 測回的正鏡水平讀數。
-        2. 保留第 1 測回高點、平點、參點之間的方向關係。
-        3. 第 2 測回平點正鏡固定為 60°00′00″。
-        4. 第 3 測回平點正鏡固定為 120°00′00″。
-        5. 除了平點正鏡以外，其餘第 2、3 測回水平讀數都加入亂數。
-        6. 水平亂數範圍依儀器精度：
-           H 門檻 = 儀器精度 × 2
-           例如 1 秒儀器 → ±2 秒
-                2 秒儀器 → ±4 秒
-                3 秒儀器 → ±6 秒
-        7. 垂直角沿用第 1 測回正鏡天頂距，再自動產生倒鏡天頂距。
-    */
-
     const h1Level = readDMSSeconds("hFace1", 1, "level");
     const h1High = readDMSSeconds("hFace1", 1, "high");
     const h1Ref = readDMSSeconds("hFace1", 1, "ref");
@@ -1611,361 +1685,186 @@ function generateFromFirstRound() {
         return;
     }
 
-    /*
-        讀取儀器精度。
+    const limits = applyInstrumentLimits();
+    const hLimit = limits.hLimit;                  
+    const currentAccuracy = getCurrentInstrumentAccuracy(); 
 
-        來源：
-        <select id="instrumentAccuracy">
-            <option value="1">1 秒</option>
-            <option value="2">2 秒</option>
-            <option value="3">3 秒</option>
-        </select>
-    */
-    const instrumentAccuracy = Number(document.getElementById("instrumentAccuracy").value) || 1;
+    // 【人類數據特徵一】：模擬這台儀器當下的「實體殘差趨勢」
+    // 讓三測回的正倒鏡差與天頂距指標差圍繞著同一個基礎值（整數）抖動，數值才會穩定自然
+    const systemicQ = randomIntegerSigned(Math.max(1, Math.floor(hLimit * 1.2))); 
+    const systemicI = randomIntegerSigned(Math.max(1, Math.floor(hLimit * 1.2))); 
 
-    /*
-        一測回水平角精度門檻：
-
-        H ≤ 儀器精度 × 2
-    */
-    const hLimit = instrumentAccuracy * 2;
-
-    /*
-        同步畫面上的 H 門檻值。
-    */
-    document.getElementById("limitH").value = hLimit;
-    document.getElementById("instrumentLimitText").textContent = hLimit;
-
-    /*
-        水平角亂數範圍，單位：秒。
-
-        instrumentAccuracy = 1 → hLimit = 2 → ±2 秒
-        instrumentAccuracy = 2 → hLimit = 4 → ±4 秒
-        instrumentAccuracy = 3 → hLimit = 6 → ±6 秒
-    */
-    const horizontalDirectionNoiseMax = hLimit;
-
-    const cLimit = Number(document.getElementById("limitC").value) || 20;
-    const iLimit = Number(document.getElementById("limitIaxis").value) || 24;
-    const vLimit = Number(document.getElementById("limitVindex").value) || 20;
-
-    /*
-        取得第 1 測回各點相對於平點的方向差。
-
-        例如第 1 測回：
-        平點 = 0°
-        高點 = 322°43′22″
-
-        則第 2 測回：
-        平點正鏡 = 60°
-        高點正鏡約 = 60° + 322°43′22″ + 亂數
-    */
     const offsetHigh = normalize360Seconds(h1High - h1Level);
-    const offsetLevel = 0;
     const offsetRef = normalize360Seconds(h1Ref - h1Level);
 
-    /*
-        取得第 1 測回的水平正倒鏡半差。
+    const roundBase = {
+        1: h1Level,
+        2: 60 * SEC_PER_DEGREE,
+        3: 120 * SEC_PER_DEGREE
+    };
 
-        half = [R - (L + 180°)] / 2
-    */
-    const diffHigh1 = getHorizontalFaceDifference(1, "high");
-    const diffLevel1 = getHorizontalFaceDifference(1, "level");
-    const diffRef1 = getHorizontalFaceDifference(1, "ref");
-
-    const firstHalfHigh = diffHigh1 === null ? 0 : diffHigh1 / 2;
-    const firstHalfLevel = diffLevel1 === null ? 0 : diffLevel1 / 2;
-    const firstHalfRef = diffRef1 === null ? 0 : diffRef1 / 2;
-
-    const firstCRoundMean = average([firstHalfHigh, firstHalfLevel, firstHalfRef]) || 0;
-
-    /*
-        目標 C：
-
-        若第 1 測回 C 已經在合理範圍內，盡量保留；
-        若偏大，則第 2、3 測回往合格範圍拉回。
-    */
-    const targetGlobalC = clamp(firstCRoundMean, -cLimit * 0.7, cLimit * 0.7);
-
-    /*
-        因為：
-
-        C總 = (C1 + C2 + C3) / 3
-
-        令 C2 = C3 = generatedCRoundMean
-
-        則：
-
-        generatedCRoundMean = (3 × targetGlobalC - C1) / 2
-    */
-    const generatedCRoundMean = (3 * targetGlobalC - firstCRoundMean) / 2;
-
-    /*
-        取得第 1 測回 i 狀態，
-        用於生成第 2、3 測回時稍微抵消第 1 測回的橫軸誤差。
-    */
-    const firstIaxis = estimateRoundIaxisFromHalfErrors(
-        1,
-        firstHalfHigh,
-        firstHalfLevel,
-        firstHalfRef
-    );
-
-    const targetGeneratedIaxis = firstIaxis === null
-        ? 0
-        : clamp(-firstIaxis / 2, -iLimit * 0.5, iLimit * 0.5);
-
-    /*
-        垂直指標誤差 I：
-
-        你的 calculate() 目前是使用平點、參點。
-        所以這裡使用第 1 測回平點、參點推估，
-        再讓第 2、3 測回抵消它。
-    */
-    const firstVIndexLevel = getVerticalIndexError(1, "level");
-    const firstVIndexRef = getVerticalIndexError(1, "ref");
-
-    const firstVIndexSum =
-        (firstVIndexLevel === null ? 0 : firstVIndexLevel) +
-        (firstVIndexRef === null ? 0 : firstVIndexRef);
-
-    /*
-        總共有 6 筆 I：
-
-        第 1 測回平、參 = 2 筆
-        第 2 測回平、參 = 2 筆
-        第 3 測回平、參 = 2 筆
-
-        令第 2、3 測回的 I 約等於 generatedVIndex：
-
-        generatedVIndex = - firstVIndexSum / 4
-    */
-    const generatedVIndex = clamp(-firstVIndexSum / 4, -vLimit * 0.5, vLimit * 0.5);
-
-    /*
-        C、i、I 模型用的小誤差。
-
-        注意：
-        這個不是水平讀數亂數。
-        水平讀數亂數使用 horizontalDirectionNoiseMax。
-
-        randomNoiseMax 不宜太大，避免 C、H、i 被撐太大。
-    */
-    const randomNoiseMax = Math.max(0.1, hLimit * 0.15);
-
-    /*
-        生成第 2、3 測回。
-    */
-    const targetRounds = [
-        {
-            round: 2,
-            levelFace1: 60 * SEC_PER_DEGREE
-        },
-        {
-            round: 3,
-            levelFace1: 120 * SEC_PER_DEGREE
+    // 讀取天頂距正鏡基礎
+    const zBaseMap = {};
+    ["high", "level", "ref"].forEach(p => {
+        let zBase = readDMSSeconds("zFace1", 1, p);
+        if (zBase === null) {
+            zBase = (p === "high") ? 72 * SEC_PER_DEGREE : 90 * SEC_PER_DEGREE;
+            setDMSSeconds("zFace1", 1, p, zBase);
         }
-    ];
-
-
-    targetRounds.forEach(item => {
-        const r = item.round;
-        const levelFace1 = item.levelFace1;
-
-        /*
-            =========================
-            1. 生成水平正鏡讀數
-            =========================
-
-            只有平點正鏡不動：
-
-            第 2 測回平點正鏡 = 60°00′00″
-            第 3 測回平點正鏡 = 120°00′00″
-
-            高點、參點正鏡：
-            依第 1 測回相對平點的方向差生成，
-            再加入水平角亂數。
-
-            亂數範圍：
-            horizontalDirectionNoiseMax = 儀器精度 × 2
-        */
-
-        // 平點正鏡固定，不加亂數
-        const hFace1Level = normalize360Seconds(levelFace1 + offsetLevel);
-
-        // 高點、參點正鏡加亂數
-        const highFace1Noise = randomIntegerSigned(horizontalDirectionNoiseMax);
-        const refFace1Noise = randomIntegerSigned(horizontalDirectionNoiseMax);
-
-        const hFace1High = normalize360Seconds(
-            levelFace1 + offsetHigh + highFace1Noise
-        );
-
-        const hFace1Ref = normalize360Seconds(
-            levelFace1 + offsetRef + refFace1Noise
-        );
-
-        // 寫入水平正鏡
-        setDMSSeconds("hFace1", r, "level", hFace1Level);
-        setDMSSeconds("hFace1", r, "high", hFace1High);
-        setDMSSeconds("hFace1", r, "ref", hFace1Ref);
-
-        /*
-            =========================
-            2. 準備水平半差 C
-            =========================
-
-            半差公式：
-
-            half = [R - (L + 180°)] / 2
-
-            後面會用：
-
-            R = L + 180° + 2 × half + 倒鏡亂數
-
-            注意：
-            這裡平點 halfLevel 不固定為 0。
-            因為你要求「平點倒鏡也要亂數」。
-        */
-
-        const vHigh = getVerticalAngle(1, "high");
-        const vLevel = getVerticalAngle(1, "level");
-        const vRef = getVerticalAngle(1, "ref");
-
-        let denominator = null;
-        if (vHigh !== null && vLevel !== null && vRef !== null) {
-            const tanHigh = Math.tan(radFromSec(vHigh));
-            const tanLevel = Math.tan(radFromSec(vLevel));
-            const tanRef = Math.tan(radFromSec(vRef));
-            const tanBase = average([tanLevel, tanRef]);
-            denominator = tanHigh - tanBase;
-        }
-        
-        const baseHalf = generatedCRoundMean + randomSigned(randomNoiseMax);
-
-        /*
-            平點、參點、高點都給半差。
-            實際倒鏡還會再加倒鏡亂數。
-        */
-        const halfLevel = baseHalf + randomSigned(randomNoiseMax);
-        const halfRef = baseHalf + randomSigned(randomNoiseMax);
-
-        let halfHigh = baseHalf + randomSigned(randomNoiseMax);
-
-        /*
-            讓生成的高點半差配合 targetGeneratedIaxis，
-            使整體 i 比較容易合格。
-
-            你的 i 公式為：
-
-            i = -1 × (halfHigh - baseHalf) / denominator
-
-            所以：
-
-            halfHigh = baseHalf - i × denominator
-        */
-        if (denominator !== null && Math.abs(denominator) > 0.000001) {
-            halfHigh = baseHalf - targetGeneratedIaxis * denominator + randomSigned(randomNoiseMax);
-        }
-
-        /*
-            =========================
-            3. 生成水平倒鏡讀數
-            =========================
-
-            這次三個點的倒鏡都要亂數：
-
-            高點倒鏡：亂數
-            平點倒鏡：亂數
-            參點倒鏡：亂數
-
-            公式：
-
-            R = L + 180° + 2C + 倒鏡亂數
-
-            其中：
-            L = 正鏡水平讀數
-            C = 該點水平半差
-        */
-
-        const highFace2Noise = randomIntegerSigned(horizontalDirectionNoiseMax);
-        const levelFace2Noise = randomIntegerSigned(horizontalDirectionNoiseMax);
-        const refFace2Noise = randomIntegerSigned(horizontalDirectionNoiseMax);
-
-        // 高點倒鏡
-        setHorizontalFace2ByHalfErrorWithNoise(
-            r,
-            "high",
-            hFace1High,
-            halfHigh,
-            highFace2Noise
-        );
-
-        // 平點倒鏡，注意：平點倒鏡現在也加亂數
-        setHorizontalFace2ByHalfErrorWithNoise(
-            r,
-            "level",
-            hFace1Level,
-            halfLevel,
-            levelFace2Noise
-        );
-
-        // 參點倒鏡
-        setHorizontalFace2ByHalfErrorWithNoise(
-            r,
-            "ref",
-            hFace1Ref,
-            halfRef,
-            refFace2Noise
-        );
-
-        /*
-            =========================
-            4. 生成天頂距 Z
-            =========================
-
-            正鏡天頂距沿用第 1 測回。
-            倒鏡天頂距依 I 產生：
-
-            I = (Z正 + Z倒 - 360°) / 2
-
-            所以：
-
-            Z倒 = 360° - Z正 + 2I
-        */
-         generateVerticalForPoint(r, "level", generatedVIndex, randomNoiseMax, horizontalDirectionNoiseMax);
-         generateVerticalForPoint(r, "high", generatedVIndex, randomNoiseMax, horizontalDirectionNoiseMax);
-         generateVerticalForPoint(r, "ref", generatedVIndex, randomNoiseMax, horizontalDirectionNoiseMax);
+        zBaseMap[p] = zBase;
     });
 
+    // 【人類數據特徵二】：強制進行度分秒的純整數進位轉換（解決分欄位死板不動的破綻）
+    function setDMSSecondsPureInteger(group, r, p, totalSeconds) {
+        totalSeconds = normalize360Seconds(totalSeconds);
+        
+        // 強制四捨五入到純整數秒
+        totalSeconds = Math.round(totalSeconds);
+
+        const d = Math.floor(totalSeconds / SEC_PER_DEGREE);
+        const rem1 = totalSeconds - d * SEC_PER_DEGREE;
+        const m = Math.floor(rem1 / SEC_PER_MINUTE);
+        const s = totalSeconds - (d * SEC_PER_DEGREE) - (m * SEC_PER_MINUTE);
+
+        const dEl = document.getElementById(`${group}_${r}_${p}_d`);
+        const mEl = document.getElementById(`${group}_${r}_${p}_m`);
+        const sEl = document.getElementById(`${group}_${r}_${p}_s`);
+
+        if (!dEl || !mEl || !sEl) return;
+
+        dEl.value = d;
+        mEl.value = m;
+        sEl.value = s; // 輸出純整數，無小數點
+    }
+
     /*
-        生成後直接計算。
+        【核心精度篩選器】
     */
+    function makeCTargets() {
+        let arr = [0, 0, 0];
+        let attempts = 0;
+        const maxNoise = Math.max(1, hLimit - 0.5); 
+
+        while (attempts < 500) {
+            arr = [
+                randomIntegerSigned(maxNoise),
+                randomIntegerSigned(maxNoise),
+                randomIntegerSigned(maxNoise)
+            ];
+            const currentH = stddev(arr);
+            if (currentH > 0.3 && currentH <= hLimit) {
+                break;
+            }
+            attempts++;
+        }
+        return arr;
+    }
+
+    let totalAttempts = 0;
+    let finalH = 999;
+
+    // 防爆與精度控管大迴圈
+    do {
+        const cTargets = makeCTargets(); 
+
+        /*
+            =========================
+            1. 模擬生成水平讀數
+            =========================
+        */
+        for (let r = 1; r <= 3; r++) {
+            let hFace1Level;
+            let hFace1High;
+            let hFace1Ref;
+
+            if (r === 1) {
+                hFace1Level = h1Level;
+                hFace1High = h1High;
+                hFace1Ref = h1Ref;
+            } else {
+                hFace1Level = roundBase[r];
+                // 人為對準不可能完美剛好 00分00秒，幫照準起始點加一個微小的整數對準殘差
+                const alignmentNoise = randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.8)));
+                hFace1Level = normalize360Seconds(hFace1Level + alignmentNoise);
+
+                const highBase = normalize360Seconds(hFace1Level + offsetHigh);
+                const refBase = normalize360Seconds(hFace1Level + offsetRef);
+
+                // 正鏡人為觀測整數雜訊
+                hFace1High = normalize360Seconds(highBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))));
+                hFace1Ref = normalize360Seconds(refBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))));
+
+                setDMSSecondsPureInteger("hFace1", r, "level", hFace1Level);
+                setDMSSecondsPureInteger("hFace1", r, "high", hFace1High);
+                setDMSSecondsPureInteger("hFace1", r, "ref", hFace1Ref);
+            }
+
+            // 倒鏡生成：加入實體系統趨勢與微幅人為隨機微調
+            const qNoise = systemicQ + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.4)));
+            const cTarget = cTargets[r - 1];            
+
+            const hFace2Level = normalize360Seconds(hFace1Level + SEC_180 + qNoise);
+            setDMSSecondsPureInteger("hFace2", r, "level", hFace2Level);
+
+            const hFace2Ref = normalize360Seconds(hFace1Ref + SEC_180 + qNoise);
+            setDMSSecondsPureInteger("hFace2", r, "ref", hFace2Ref);
+
+            const leftReduced = normalize180(hFace1High - hFace1Ref);
+            // 橫軸誤差微調（確保 i 殘差數值漂亮且穩定）
+            const iNoise = randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))); 
+            const hFace2High = normalize360Seconds(hFace2Ref + leftReduced - cTarget + iNoise);
+            setDMSSecondsPureInteger("hFace2", r, "high", hFace2High);
+        }
+
+        // 提取數據進行模擬 H 計算檢核
+        const checkH = getHorizontalPrecisionHForB();
+        finalH = checkH !== null ? roundForJudge(checkH, 1) : 999;
+
+        totalAttempts++;
+        if (totalAttempts > 300) break; 
+
+    } while (finalH > hLimit); 
+
+    /*
+        =========================
+        2. 生成天頂距
+        =========================
+    */
+    ["high", "level", "ref"].forEach(p => {
+        const zBase = zBaseMap[p];
+        for (let r = 1; r <= 3; r++) {
+            let zFace1;
+            if (r === 1) {
+                zFace1 = zBase;
+            } else {
+                // 正鏡天頂距微幅人為整數抖動
+                zFace1 = normalize360Seconds(zBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 1.2))));
+                setDMSSecondsPureInteger("zFace1", r, p, zFace1);
+            }
+            
+            // 垂直指標倒鏡生成：融合系統特徵殘差 + 人為整數觀測雜訊
+            const indexError = systemicI + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5)));
+            const twoI = indexError * 2;
+            const zFace2 = normalize360Seconds(SEC_PER_CIRCLE - zFace1 + twoI);
+            
+            setDMSSecondsPureInteger("zFace2", r, p, zFace2);
+        }
+    });
+
+    // 重新整理並輸出計算判定
     calculate();
 
-    /*
-        若仍然不合格，提醒使用者。
-        這通常代表第 1 測回本身誤差太大，
-        單靠第 2、3 測回已難以補回。
-    */
-    const judgeC = document.getElementById("judgeC")?.textContent || "";
-    const judgeIaxis = document.getElementById("judgeIaxis")?.textContent || "";
-    const judgeVindex = document.getElementById("judgeVindex")?.textContent || "";
-    const judgeH = document.getElementById("judgeH")?.textContent || "";
+    function judgePass(id) {
+        const text = document.getElementById(id)?.textContent?.trim() || "";
+        return text === "合格";
+    }
 
-    if (
-        judgeC.includes("不合格") ||
-        judgeIaxis.includes("不合格") ||
-        judgeVindex.includes("不合格") ||
-        judgeH.includes("不合格")
-    ) {
-        alert(
-            "已依第 1 測回生成第 2、3 測回，但仍有項目不合格。\n\n" +
-            "可能原因：第 1 測回誤差過大，單靠第 2、3 測回無法完全補償。\n" +
-            "請檢查第 1 測回資料，或重新觀測第 1 測回。"
-        );
+    if (judgePass("judgeC") && judgePass("judgeIaxis") && judgePass("judgeVindex") && judgePass("judgeH")) {
+        return; 
     }
 }
+
+
 
 
 /* =========================
