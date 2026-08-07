@@ -1082,47 +1082,34 @@ function getCollimationValueForB(r, pKey) {
 }
 function getAllCollimationValuesForB() {
     /*
-        照準軸誤差 C
-        使用 ISO / 內政部規範的歸算方向值 Reduced Directions。
+        照準軸誤差 C：
 
-        每一測回：
+        Ck = (HL - HR + 180°) / 2
 
-            Ck = (H_L_high - H_L_ref) - (H_R_high - H_R_ref)
+        僅使用平點。
+        平點的垂直角接近 0°，
+        可避免橫軸誤差 i 對水平讀數造成影響。
 
-        H_L = 正鏡 hFace1
-        H_R = 倒鏡 hFace2
-
-        注意：
-        1. 不使用平點 level。
-        2. 不使用 q = H倒 - H正 - 180°。
-        3. 不除以 2。
-        4. 倒鏡的 180° 常數會在方向差中自動抵消。
+        共 3 測回，得到 3 個 Ck。
     */
 
     const values = [];
 
     for (let r = 1; r <= 3; r++) {
-        const leftHigh = getAngleSeconds("hFace1", r, "high");
-        const leftRef = getAngleSeconds("hFace1", r, "ref");
+        const hFace1 = getAngleSeconds("hFace1", r, "level");
+        const hFace2 = getAngleSeconds("hFace2", r, "level");
 
-        const rightHigh = getAngleSeconds("hFace2", r, "high");
-        const rightRef = getAngleSeconds("hFace2", r, "ref");
-
-        if (
-            leftHigh === null ||
-            leftRef === null ||
-            rightHigh === null ||
-            rightRef === null
-        ) {
+        if (hFace1 === null || hFace2 === null) {
             continue;
         }
 
-        const leftReduced = normalize180(leftHigh - leftRef);
-        const rightReduced = normalize180(rightHigh - rightRef);
+        const faceDifference = normalize180(
+            hFace1 - hFace2 + SEC_180
+        );
 
-        const cValue = normalize180(leftReduced - rightReduced);
+        const cValue = faceDifference / 2;
 
-        if (!isNaN(cValue) && isFinite(cValue)) {
+        if (Number.isFinite(cValue)) {
             values.push(cValue);
         }
     }
@@ -1133,122 +1120,178 @@ function getAllCollimationValuesForB() {
 
 
 
+
 function getHorizontalPrecisionHForB() {
     /*
         一測回水平角精度 H
 
-        依第四張圖：
+        每一測回先計算「高點 → 參點」的水平角：
 
-            H = Ck 的樣本標準差
+            β正 = H正(參點) - H正(高點)
+            β倒 = H倒(參點) - H倒(高點)
 
-        其中 Ck 是：
+        將正、倒鏡平均，得到該測回的水平角 βk：
 
-            Ck = (H_L_high - H_L_ref) - (H_R_high - H_R_ref)
+            βk = β正 + normalize180(β倒 - β正) / 2
 
-        例如：
-            Ck = [-5, +1, 0]
-            H = sample standard deviation(Ck)
-              ≈ 3.21"
+        最後以三個測回的 βk 求樣本標準差。
     */
 
-    const cValues = getAllCollimationValuesForB();
-
-    return stddev(cValues);
-}
-
-function getVerticalIndexValuesForB() {
-    /*
-        垂直指標誤差 I
-
-        只使用平點 level：
-
-            Ik = (Z_L_level + Z_R_level - 360°) / 2
-
-        不使用高點 high。
-        不使用參點 ref。
-    */
-
-    const values = [];
+    const angleValues = [];
 
     for (let r = 1; r <= 3; r++) {
-        const zLeftLevel = getAngleSeconds("zFace1", r, "level");
-        const zRightLevel = getAngleSeconds("zFace2", r, "level");
+        const hHighFace1 = getAngleSeconds("hFace1", r, "high");
+        const hHighFace2 = getAngleSeconds("hFace2", r, "high");
 
-        if (zLeftLevel === null || zRightLevel === null) {
+        const hRefFace1 = getAngleSeconds("hFace1", r, "ref");
+        const hRefFace2 = getAngleSeconds("hFace2", r, "ref");
+
+        if (
+            hHighFace1 === null ||
+            hHighFace2 === null ||
+            hRefFace1 === null ||
+            hRefFace2 === null
+        ) {
             continue;
         }
 
-        const value = normalize180(
-            zLeftLevel + zRightLevel - SEC_PER_CIRCLE
-        ) / 2;
+        // 正鏡：高點 → 參點的水平角
+        const betaFace1 = normalize360Seconds(
+            hRefFace1 - hHighFace1
+        );
 
-        if (!isNaN(value) && isFinite(value)) {
-            values.push(value);
+        // 倒鏡：高點 → 參點的水平角
+        const betaFace2 = normalize360Seconds(
+            hRefFace2 - hHighFace2
+        );
+
+        /*
+            避免 0° / 360° 邊界造成平均錯誤。
+            betaFace2 - betaFace1 先化為 ±180° 內的最短差。
+        */
+        const betaMean =
+            betaFace1 +
+            normalize180(betaFace2 - betaFace1) / 2;
+
+        if (Number.isFinite(betaMean)) {
+            angleValues.push(betaMean);
         }
     }
 
+    return stddev(angleValues);
+}
+
+
+function getVerticalIndexValuesForB() {
+    /*
+        垂直指標誤差 I：
+
+        Ik = (Z正鏡 + Z倒鏡 - 360°) / 2
+
+        使用：
+        3 測回 × 高點、平點、參點，共 9 筆。
+    */
+
+
+    const values = [];
+    const pointKeys = ["level", "ref"];
+    for (let r = 1; r <= 3; r++) {
+        for (const pointKey of pointKeys) {
+            const zFace1 = getAngleSeconds("zFace1", r, pointKey);
+            const zFace2 = getAngleSeconds("zFace2", r, pointKey);
+            if (zFace1 === null || zFace2 === null) {
+                continue;
+            }
+            const value =
+                (zFace1 + zFace2 - SEC_PER_CIRCLE) / 2;
+            if (Number.isFinite(value)) {
+                values.push(value);
+            }
+        }
+    }
     return values;
 }
 
 
 
+
+
 function getIaxisCandidatesForB() {
     /*
-        橫軸誤差 i
+        橫軸誤差 i：
 
-        公式：
+        i_k = (C_high,k - C_level,k) / tan(alpha_high,k)
 
-            d = H_L - H_R + 180°
+        C_high,k：
+        高點該測回的照準軸候選值。
 
-            i = (d_high - d_ref)
-                / [2 × (tan(alpha_high) - tan(alpha_ref))]
+        C_level,k：
+        平點該測回的照準軸候選值。
 
-        其中：
-            alpha = 90° - Z
-                  = 垂直角 / 仰角
-
-        本程式使用 getVerticalAngle() 取得 alpha。
-        getVerticalAngle() 會用正倒鏡平均後的天頂距，較穩定。
+        alpha_high,k：
+        高點垂直角，alpha = 90° - Z。
     */
 
     const values = [];
 
     for (let r = 1; r <= 3; r++) {
-        const dHigh = getLeftRightFaceDifferenceForI(r, "high");
-        const dRef = getLeftRightFaceDifferenceForI(r, "ref");
+        const hHighFace1 = getAngleSeconds("hFace1", r, "high");
+        const hHighFace2 = getAngleSeconds("hFace2", r, "high");
 
-        const alphaHigh = getVerticalAngle(r, "high");
-        const alphaRef = getVerticalAngle(r, "ref");
+        const hLevelFace1 = getAngleSeconds("hFace1", r, "level");
+        const hLevelFace2 = getAngleSeconds("hFace2", r, "level");
+
+        const zHighFace1 = getAngleSeconds("zFace1", r, "high");
 
         if (
-            dHigh === null ||
-            dRef === null ||
-            alphaHigh === null ||
-            alphaRef === null
+            hHighFace1 === null ||
+            hHighFace2 === null ||
+            hLevelFace1 === null ||
+            hLevelFace2 === null ||
+            zHighFace1 === null
         ) {
             continue;
         }
 
-        const tanHigh = Math.tan(radFromSec(alphaHigh));
-        const tanRef = Math.tan(radFromSec(alphaRef));
+        // 高點該測回照準軸誤差候選值
+        const dHigh = normalize180(
+            hHighFace1 - hHighFace2 + SEC_180
+        );
+        const cHigh = dHigh / 2;
 
-        const denominator = 2 * (tanHigh - tanRef);
+        // 平點該測回照準軸誤差候選值
+        const dLevel = normalize180(
+            hLevelFace1 - hLevelFace2 + SEC_180
+        );
+        const cLevel = dLevel / 2;
 
-        if (Math.abs(denominator) < 0.000001) {
+        /*
+            天頂距 Z 轉垂直角 alpha：
+
+            alpha = 90° - Z
+
+            例如：
+            Z = 70°42′37″
+            alpha = +19°17′23″
+        */
+        const alpha = SEC_90 - zHighFace1;
+
+        const tanAlpha = Math.tan(alpha * Math.PI / SEC_180);
+
+        if (!Number.isFinite(tanAlpha) || Math.abs(tanAlpha) < 1e-12) {
             continue;
         }
 
-        const numerator = normalize180(dHigh - dRef);
+        const iValue = (cHigh - cLevel) / tanAlpha;
 
-        const iValue = numerator / denominator;
-
-        if (!isNaN(iValue) && isFinite(iValue)) {
+        if (Number.isFinite(iValue)) {
             values.push(iValue);
         }
     }
 
     return values;
 }
+
 
 
 
@@ -1597,22 +1640,41 @@ function calculate() {
         =========================
         3. 垂直指標誤差 I
         =========================
-
-        只使用平點 level：
-
-        I = (Z_L_level + Z_R_level - 360°) / 2
+        每一點的垂直指標誤差：
+        Ik = (Z_L + Z_R - 360°) / 2
+        使用：
+        3 測回 × 高點、平點、參點
+        共 9 筆正倒鏡天頂距資料。
+        I  = average(Ik)
+        I± = standard error(Ik)
     */
-
-    const vIndexCandidates = getVerticalIndexValuesForB();
-    const Vindex = average(vIndexCandidates);
-    const VindexSd = standardError(vIndexCandidates);
+     const vIndexCandidates = getVerticalIndexValuesForB();
+     const Vindex = average(vIndexCandidates);
+     const VindexSd = standardError(vIndexCandidates);
+     
+     console.table(
+         vIndexCandidates.map((value, index) => ({
+             編號: index + 1,
+             I角秒: value
+         }))
+     );
+     
+     console.log("I 原始平均值 =", Vindex);
+     console.log("I 顯示值 =", Vindex.toFixed(1));
+     
+     if (vIndexCandidates.length !== 9) {
+         warnings.push(
+             `垂直指標誤差 I 目前只有 ${vIndexCandidates.length} 筆有效資料，` +
+             `完整計算應有 9 筆（3 測回 × 3 點）。`
+         );
+     }
 
     /*
         =========================
         4. 一測回水平角精度 H
         =========================
 
-        H = Ck 的樣本標準差
+        H = 三測回「高點至參點」正倒鏡平均水平角的樣本標準差
     */
 
     const H = getHorizontalPrecisionHForB();
@@ -1930,6 +1992,21 @@ function normalize360Seconds(sec) {
 
     return sec;
 }
+
+function normalize180(sec) {
+    sec = sec % SEC_180;
+
+    if (sec > SEC_90) {
+        sec -= SEC_180;
+    }
+
+    if (sec <= -SEC_90) {
+        sec += SEC_180;
+    }
+
+    return sec;
+}
+
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
