@@ -334,10 +334,10 @@
 <div class="note">
     <strong>計算模式說明：</strong><br>
     1. 角度輸入格式為「度、分、秒」，程式會自動換算成秒數計算。<br>
-    2. 照準軸誤差 C 採用歸算方向值：Ck = (正鏡高點 − 正鏡參點) − (倒鏡高點 − 倒鏡參點)，再取三測回平均值。<br>
-    3. 橫軸誤差 i 採用盤左盤右差 d = H正 − H倒 + 180°，並以 i = (d高 − d參) / [2 × (tanα高 − tanα參)] 計算。<br>
-    4. 垂直指標誤差 I 只採用平點：I =（正鏡平點天頂距 + 倒鏡平點天頂距 − 360°）/2。<br>
-    5. 一測回水平角精度 H 採用 Ck 三個歸算方向差值的樣本標準差。<br>
+    2. 照準軸誤差 C 採用平點盤左盤右半差：Ck = (H正平 − H倒平 + 180°) / 2，再取三測回平均值。<br>
+    3. 橫軸誤差 i 採用盤左盤右差 d = H正 − H倒 + 180°，並以 i = (d高 − d平) / (2 × tanα高) 計算；α高採正倒鏡平均天頂距（Zmean = (Z正 + (360° − Z倒)) / 2）。<br>
+    4. 垂直指標誤差 I 採用平點與參點：I =（正鏡天頂距 + 倒鏡天頂距 − 360°）/2。<br>
+    5. 一測回水平角精度 H 採用「平點 → 參點」正倒鏡平均水平角三個測回值的樣本標準差。<br>
     6. H 判定門檻值為儀器精度的 2 倍。<br>
     7. 計算數據格式中，「平均值 +/- 誤差值」之 +/- 採樣本標準誤顯示。
 </div>
@@ -1125,10 +1125,10 @@ function getHorizontalPrecisionHForB() {
     /*
         一測回水平角精度 H
 
-        每一測回先計算「高點 → 參點」的水平角：
+        每一測回先計算「平點 → 參點」的水平角：
 
-            β正 = H正(參點) - H正(高點)
-            β倒 = H倒(參點) - H倒(高點)
+            β正 = H正(參點) - H正(平點)
+            β倒 = H倒(參點) - H倒(平點)
 
         將正、倒鏡平均，得到該測回的水平角 βk：
 
@@ -1140,29 +1140,29 @@ function getHorizontalPrecisionHForB() {
     const angleValues = [];
 
     for (let r = 1; r <= 3; r++) {
-        const hHighFace1 = getAngleSeconds("hFace1", r, "high");
-        const hHighFace2 = getAngleSeconds("hFace2", r, "high");
+        const hLevelFace1 = getAngleSeconds("hFace1", r, "level");
+        const hLevelFace2 = getAngleSeconds("hFace2", r, "level");
 
         const hRefFace1 = getAngleSeconds("hFace1", r, "ref");
         const hRefFace2 = getAngleSeconds("hFace2", r, "ref");
 
         if (
-            hHighFace1 === null ||
-            hHighFace2 === null ||
+            hLevelFace1 === null ||
+            hLevelFace2 === null ||
             hRefFace1 === null ||
             hRefFace2 === null
         ) {
             continue;
         }
 
-        // 正鏡：高點 → 參點的水平角
+        // 正鏡：平點 → 參點的水平角
         const betaFace1 = normalize360Seconds(
-            hRefFace1 - hHighFace1
+            hRefFace1 - hLevelFace1
         );
 
-        // 倒鏡：高點 → 參點的水平角
+        // 倒鏡：平點 → 參點的水平角
         const betaFace2 = normalize360Seconds(
-            hRefFace2 - hHighFace2
+            hRefFace2 - hLevelFace2
         );
 
         /*
@@ -1241,14 +1241,14 @@ function getIaxisCandidatesForB() {
         const hLevelFace1 = getAngleSeconds("hFace1", r, "level");
         const hLevelFace2 = getAngleSeconds("hFace2", r, "level");
 
-        const zHighFace1 = getAngleSeconds("zFace1", r, "high");
+        const zHighMean = getMeanZenith(r, "high");
 
         if (
             hHighFace1 === null ||
             hHighFace2 === null ||
             hLevelFace1 === null ||
             hLevelFace2 === null ||
-            zHighFace1 === null
+            zHighMean === null
         ) {
             continue;
         }
@@ -1268,13 +1268,16 @@ function getIaxisCandidatesForB() {
         /*
             天頂距 Z 轉垂直角 alpha：
 
-            alpha = 90° - Z
+            採用正倒鏡平均天頂距：
+            Zmean = (Z正 + (360° - Z倒)) / 2
+
+            alpha = 90° - Zmean
 
             例如：
             Z = 70°42′37″
             alpha = +19°17′23″
         */
-        const alpha = SEC_90 - zHighFace1;
+        const alpha = SEC_90 - zHighMean;
 
         const tanAlpha = Math.tan(alpha * Math.PI / SEC_180);
 
@@ -1748,24 +1751,29 @@ function generateFromFirstRound() {
     }
 
     const limits = applyInstrumentLimits();
-    const hLimit = limits.hLimit;                  
-    const currentAccuracy = getCurrentInstrumentAccuracy(); 
-
-    // 【人類數據特徵一】：模擬這台儀器當下的「實體殘差趨勢」
-    // 讓三測回的正倒鏡差與天頂距指標差圍繞著同一個基礎值（整數）抖動，數值才會穩定自然
-    const systemicQ = randomIntegerSigned(Math.max(1, Math.floor(hLimit * 1.2))); 
-    const systemicI = randomIntegerSigned(Math.max(1, Math.floor(hLimit * 1.2))); 
+    const hLimit = limits.hLimit;
+    const cLimit = limits.cLimit;
+    const iLimit = limits.iAxisLimit;
+    const vLimit = limits.vIndexLimit;
+    const currentAccuracy = getCurrentInstrumentAccuracy();
 
     const offsetHigh = normalize360Seconds(h1High - h1Level);
     const offsetRef = normalize360Seconds(h1Ref - h1Level);
 
+    /*
+        平點正鏡固定值：
+        第 1 測回 = 使用者輸入（通常 0°00'00"）
+        第 2 測回 = 60°00'00"
+        第 3 測回 = 120°00'00"
+        按「生成」時不會被亂數變動。
+    */
     const roundBase = {
         1: h1Level,
         2: 60 * SEC_PER_DEGREE,
         3: 120 * SEC_PER_DEGREE
     };
 
-    // 讀取天頂距正鏡基礎
+    // 天頂距正鏡基準（第 1 測回）
     const zBaseMap = {};
     ["high", "level", "ref"].forEach(p => {
         let zBase = readDMSSeconds("zFace1", 1, p);
@@ -1776,62 +1784,81 @@ function generateFromFirstRound() {
         zBaseMap[p] = zBase;
     });
 
-    // 【人類數據特徵二】：強制進行度分秒的純整數進位轉換（解決分欄位死板不動的破綻）
-    function setDMSSecondsPureInteger(group, r, p, totalSeconds) {
-        totalSeconds = normalize360Seconds(totalSeconds);
-        
-        // 強制四捨五入到純整數秒
-        totalSeconds = Math.round(totalSeconds);
-
+    function writeDMS(group, r, p, totalSeconds) {
+        totalSeconds = normalize360Seconds(Math.round(totalSeconds));
         const d = Math.floor(totalSeconds / SEC_PER_DEGREE);
-        const rem1 = totalSeconds - d * SEC_PER_DEGREE;
-        const m = Math.floor(rem1 / SEC_PER_MINUTE);
-        const s = totalSeconds - (d * SEC_PER_DEGREE) - (m * SEC_PER_MINUTE);
-
+        const rem = totalSeconds - d * SEC_PER_DEGREE;
+        const m = Math.floor(rem / SEC_PER_MINUTE);
+        const s = rem - m * SEC_PER_MINUTE;
         const dEl = document.getElementById(`${group}_${r}_${p}_d`);
         const mEl = document.getElementById(`${group}_${r}_${p}_m`);
         const sEl = document.getElementById(`${group}_${r}_${p}_s`);
-
         if (!dEl || !mEl || !sEl) return;
-
         dEl.value = d;
         mEl.value = m;
-        sEl.value = s; // 輸出純整數，無小數點
+        sEl.value = s;
     }
 
-    /*
-        【核心精度篩選器】
-    */
-    function makeCTargets() {
-        let arr = [0, 0, 0];
-        let attempts = 0;
-        const maxNoise = Math.max(1, hLimit - 0.5); 
-
-        while (attempts < 500) {
-            arr = [
-                randomIntegerSigned(maxNoise),
-                randomIntegerSigned(maxNoise),
-                randomIntegerSigned(maxNoise)
-            ];
-            const currentH = stddev(arr);
-            if (currentH > 0.3 && currentH <= hLimit) {
-                break;
-            }
-            attempts++;
-        }
-        return arr;
+    function judgePass(id) {
+        const el = document.getElementById(id);
+        return ((el && el.textContent ? el.textContent : "").trim() === "合格");
     }
 
-    let totalAttempts = 0;
-    let finalH = 999;
+    // 人為觀測整數雜訊幅度（依儀器精度）
+    const obsJitter = Math.max(1, Math.round(currentAccuracy * 0.5));
 
-    // 防爆與精度控管大迴圈
+    let attempts = 0;
+    let allPass = false;
+
     do {
-        const cTargets = makeCTargets(); 
+        /*
+            每次重試都重新挑選「這台儀器當下的系統性殘差」，
+            讓三測回圍繞同一個趨勢抖動，數值才會自然。
+        */
+        const cTarget = randomSigned(Math.max(1, Math.min(cLimit, 16) * 0.4));
+        const iTarget = randomSigned(Math.max(1, Math.min(iLimit, 20) * 0.4));
+        const vTarget = randomSigned(Math.max(1, Math.min(vLimit, 16) * 0.4));
+
+        const qBase = Math.round(-2 * cTarget);
+        const iPerRound = Math.max(1, Math.min(iLimit, 20) * 0.15);
+
+        // 參點相對平點的抖動（決定一測回水平角精度 H）
+        const hMag = Math.max(1, Math.ceil(hLimit * 0.7));
+        let refJit = [0, 0, 0];
+        let hTry = 0;
+        do {
+            refJit = [0, randomIntegerSigned(hMag), randomIntegerSigned(hMag)];
+            const hv = stddev(refJit);
+            if (hv >= 0.3 && hv <= hLimit) break;
+            hTry++;
+        } while (hTry < 300);
 
         /*
             =========================
-            1. 模擬生成水平讀數
+            1. 生成天頂距
+            =========================
+        */
+        ["high", "level", "ref"].forEach(p => {
+            const zBase = zBaseMap[p];
+            for (let r = 1; r <= 3; r++) {
+                let zFace1;
+                if (r === 1) {
+                    zFace1 = zBase;
+                } else {
+                    zFace1 = normalize360Seconds(
+                        zBase + randomIntegerSigned(Math.max(1, Math.round(currentAccuracy * 0.8)))
+                    );
+                    writeDMS("zFace1", r, p, zFace1);
+                }
+                const indexError = Math.round(vTarget) + randomIntegerSigned(obsJitter);
+                const zFace2 = normalize360Seconds(SEC_PER_CIRCLE - zFace1 + indexError * 2);
+                writeDMS("zFace2", r, p, zFace2);
+            }
+        });
+
+        /*
+            =========================
+            2. 生成水平讀數
             =========================
         */
         for (let r = 1; r <= 3; r++) {
@@ -1844,86 +1871,46 @@ function generateFromFirstRound() {
                 hFace1High = h1High;
                 hFace1Ref = h1Ref;
             } else {
+                // 平點正鏡固定 60° / 120°，不加雜訊
                 hFace1Level = roundBase[r];
-                // 人為對準不可能完美剛好 00分00秒，幫照準起始點加一個微小的整數對準殘差
-                const alignmentNoise = randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.8)));
-                hFace1Level = normalize360Seconds(hFace1Level + alignmentNoise);
-
-                const highBase = normalize360Seconds(hFace1Level + offsetHigh);
-                const refBase = normalize360Seconds(hFace1Level + offsetRef);
-
-                // 正鏡人為觀測整數雜訊
-                hFace1High = normalize360Seconds(highBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))));
-                hFace1Ref = normalize360Seconds(refBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))));
-
-                setDMSSecondsPureInteger("hFace1", r, "level", hFace1Level);
-                setDMSSecondsPureInteger("hFace1", r, "high", hFace1High);
-                setDMSSecondsPureInteger("hFace1", r, "ref", hFace1Ref);
+                hFace1High = normalize360Seconds(
+                    hFace1Level + offsetHigh + randomIntegerSigned(obsJitter)
+                );
+                hFace1Ref = normalize360Seconds(
+                    hFace1Level + offsetRef + refJit[r - 1]
+                );
+                writeDMS("hFace1", r, "level", hFace1Level);
+                writeDMS("hFace1", r, "high", hFace1High);
+                writeDMS("hFace1", r, "ref", hFace1Ref);
             }
 
-            // 倒鏡生成：加入實體系統趨勢與微幅人為隨機微調
-            const qNoise = systemicQ + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.4)));
-            const cTarget = cTargets[r - 1];            
-
+            // 倒鏡：平點與參點共用同一個盤左盤右差（決定照準軸誤差 C）
+            const qNoise = qBase + randomIntegerSigned(obsJitter);
             const hFace2Level = normalize360Seconds(hFace1Level + SEC_180 + qNoise);
-            setDMSSecondsPureInteger("hFace2", r, "level", hFace2Level);
-
             const hFace2Ref = normalize360Seconds(hFace1Ref + SEC_180 + qNoise);
-            setDMSSecondsPureInteger("hFace2", r, "ref", hFace2Ref);
+            writeDMS("hFace2", r, "level", hFace2Level);
+            writeDMS("hFace2", r, "ref", hFace2Ref);
 
-            const leftReduced = normalize180(hFace1High - hFace1Ref);
-            // 橫軸誤差微調（確保 i 殘差數值漂亮且穩定）
-            const iNoise = randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5))); 
-            const hFace2High = normalize360Seconds(hFace2Ref + leftReduced - cTarget + iNoise);
-            setDMSSecondsPureInteger("hFace2", r, "high", hFace2High);
+            // 高點倒鏡：依 i 目標反算（決定橫軸誤差 i）
+            const alphaHigh = SEC_90 - getMeanZenith(r, "high");
+            const tanAlpha = Math.tan(alphaHigh * Math.PI / SEC_180);
+            const iRound = iTarget + randomSigned(iPerRound);
+            const delta = Math.round(2 * iRound * tanAlpha) + randomIntegerSigned(obsJitter);
+            const qHigh = qNoise - delta;
+            const hFace2High = normalize360Seconds(hFace1High + SEC_180 + qHigh);
+            writeDMS("hFace2", r, "high", hFace2High);
         }
 
-        // 提取數據進行模擬 H 計算檢核
-        const checkH = getHorizontalPrecisionHForB();
-        finalH = checkH !== null ? roundForJudge(checkH, 1) : 999;
+        calculate();
 
-        totalAttempts++;
-        if (totalAttempts > 300) break; 
+        allPass =
+            judgePass("judgeC") &&
+            judgePass("judgeIaxis") &&
+            judgePass("judgeVindex") &&
+            judgePass("judgeH");
 
-    } while (finalH > hLimit); 
-
-    /*
-        =========================
-        2. 生成天頂距
-        =========================
-    */
-    ["high", "level", "ref"].forEach(p => {
-        const zBase = zBaseMap[p];
-        for (let r = 1; r <= 3; r++) {
-            let zFace1;
-            if (r === 1) {
-                zFace1 = zBase;
-            } else {
-                // 正鏡天頂距微幅人為整數抖動
-                zFace1 = normalize360Seconds(zBase + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 1.2))));
-                setDMSSecondsPureInteger("zFace1", r, p, zFace1);
-            }
-            
-            // 垂直指標倒鏡生成：融合系統特徵殘差 + 人為整數觀測雜訊
-            const indexError = systemicI + randomIntegerSigned(Math.max(1, Math.floor(currentAccuracy * 0.5)));
-            const twoI = indexError * 2;
-            const zFace2 = normalize360Seconds(SEC_PER_CIRCLE - zFace1 + twoI);
-            
-            setDMSSecondsPureInteger("zFace2", r, p, zFace2);
-        }
-    });
-
-    // 重新整理並輸出計算判定
-    calculate();
-
-    function judgePass(id) {
-        const text = document.getElementById(id)?.textContent?.trim() || "";
-        return text === "合格";
-    }
-
-    if (judgePass("judgeC") && judgePass("judgeIaxis") && judgePass("judgeVindex") && judgePass("judgeH")) {
-        return; 
-    }
+        attempts++;
+    } while (!allPass && attempts < 500);
 }
 
 
